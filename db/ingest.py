@@ -1118,12 +1118,12 @@ def ingest_pdf_ccss_alignments(conn):
 
 def bridge_mn2007(conn, standards_map):
     """
-    The cross-reference map groups MN-2007 and MN-2022 strand codes by topic cluster.
-    When a CPM module is aligned to an MN-2022 numeric code, we find the matching
-    topic cluster and add alignments to ALL MN-2007 codes in that same cluster.
+    Bridge MN-2007 alignments using the cross-reference map's CCSS-M ↔ MN-2007 mapping.
+    Each topic cluster in the cross-reference map lists CCSS-M codes, MN-2007 codes,
+    and MN-2022 codes that cover the same concept.
 
-    This is a TARGETED bridge: each MN-2007 code only links to modules that cover
-    its topic cluster, not to every module in the grade.
+    When a CPM module has a CCSS-M or MN-2022 alignment that appears in a cluster,
+    we add alignments to the MN-2007 codes in that SAME cluster (not the whole grade).
     """
     f = get_data_file("DOK_Rigor_v4")
     if not f:
@@ -1132,60 +1132,87 @@ def bridge_mn2007(conn, standards_map):
 
     xref = pd.read_excel(f, sheet_name="Cross-Reference Map")
 
-    # Build: MN-2022 numeric code → set of MN-2007 codes (via topic cluster)
-    # Step 1: For each cluster, get MN-2022 strand codes and MN-2007 codes
-    # Step 2: Map MN-2022 strand codes → MN-2022 numeric codes (same strand+grade)
+    # Build lookup: CCSS code → [MN-2007 codes] and MN-2022-numeric code → [MN-2007 codes]
+    ccss_to_mn07 = {}
+    mn22_to_mn07 = {}
 
-    # MN-2022 strand-to-numeric mapping by grade and strand number:
-    # Strand codes use letters: DP (strand 1), GM (strand 2), N/A (strand 3)
-    # Numeric codes use numbers: x.1.y.z (strand 1), x.2.y.z (strand 2), x.3.y.z (strand 3)
-    strand_letter_to_num = {
-        'DP': '1', 'GM': '2', 'N': '3', 'A': '3', 'PR': '3',
-    }
-
-    # Build cluster mapping
-    mn22_numeric_to_mn07 = {}  # MN-2022 numeric code → [MN-2007 codes]
-    new_count = 0
+    # MN-2022 strand letter → numeric strand number
+    strand_map = {'DP': '1', 'GM': '2', 'N': '3', 'A': '3', 'PR': '3'}
 
     for _, row in xref.iterrows():
         grade = str(row.get('Grade', '')).strip()
         mn07_codes = split_codes(row.get('MN 2007 Codes'))
+        ccss_codes = split_codes(row.get('CCSS-M Codes'))
         mn22_strand_codes = split_codes(row.get('MN 2022 Codes'))
 
         if not mn07_codes:
             continue
 
-        # For each MN-2022 strand code, find the numeric equivalent
-        # E.g., 6.GM.1.1 → strand GM → numeric strand 2 → look for 6.2.x.x codes
+        # Map each CCSS code in this cluster → MN-2007 codes
+        for ccss in ccss_codes:
+            if ccss not in ccss_to_mn07:
+                ccss_to_mn07[ccss] = set()
+            ccss_to_mn07[ccss].update(mn07_codes)
+
+        # Map MN-2022 strand codes → find matching numeric codes → MN-2007
         for strand_code in mn22_strand_codes:
             parts = strand_code.split('.')
-            if len(parts) < 2:
+            if len(parts) < 4:
                 continue
-            strand_letter = parts[1]  # e.g., 'GM', 'DP', 'N'
-            strand_num = strand_letter_to_num.get(strand_letter)
+            strand_letter = parts[1]
+            strand_num = strand_map.get(strand_letter)
             if not strand_num:
                 continue
+            # The anchor standard number is parts[2]
+            anchor = parts[2]
+            # Match numeric codes: grade.strand_num.anchor.X
+            pattern = f"{grade}.{strand_num}.{anchor}.%"
+            for (num_code,) in conn.execute(
+                "SELECT code FROM standards WHERE framework='MN-2022' AND grade=? AND code LIKE ?",
+                (grade, pattern)
+            ).fetchall():
+                if num_code not in mn22_to_mn07:
+                    mn22_to_mn07[num_code] = set()
+                mn22_to_mn07[num_code].update(mn07_codes)
 
-            # Find all MN-2022 numeric codes for this grade and strand
-            numeric_codes = conn.execute(
-                "SELECT id, code FROM standards WHERE framework='MN-2022' AND grade=? AND code LIKE ?",
-                (grade, f"{grade}.{strand_num}.%")
-            ).fetchall()
+    new_count = 0
 
-            for (num_id, num_code) in numeric_codes:
-                if num_code not in mn22_numeric_to_mn07:
-                    mn22_numeric_to_mn07[num_code] = set()
-                mn22_numeric_to_mn07[num_code].update(mn07_codes)
+    # Bridge from CCSS-M alignments
+    ccss_alignments = conn.execute("""
+        SELECT a.module_id, s.code FROM cpm_standard_alignments a
+        JOIN standards s ON a.standard_id = s.id WHERE s.framework = 'CCSS-M'
+    """).fetchall()
 
-    # Now: for each CPM module with an MN-2022 alignment, add MN-2007 alignments
+    for (mod_id, ccss_code) in ccss_alignments:
+        # Try exact match first
+        mn07_codes = ccss_to_mn07.get(ccss_code, set())
+        if not mn07_codes:
+            # Try prefix match (e.g., 6.NS.B.4 → check 6.NS.B)
+            prefix = '.'.join(ccss_code.split('.')[:3])
+            for k, v in ccss_to_mn07.items():
+                if k.startswith(prefix):
+                    mn07_codes.update(v)
+                    break
+        for mn07_code in mn07_codes:
+            mn07_std = conn.execute(
+                "SELECT id FROM standards WHERE framework='MN-2007' AND code=?",
+                (mn07_code,)
+            ).fetchone()
+            if mn07_std:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                    (mod_id, mn07_std[0], 'bridged_via_ccss')
+                )
+                new_count += 1
+
+    # Bridge from MN-2022 alignments
     mn22_alignments = conn.execute("""
         SELECT a.module_id, s.code FROM cpm_standard_alignments a
-        JOIN standards s ON a.standard_id = s.id
-        WHERE s.framework = 'MN-2022'
+        JOIN standards s ON a.standard_id = s.id WHERE s.framework = 'MN-2022'
     """).fetchall()
 
     for (mod_id, mn22_code) in mn22_alignments:
-        mn07_codes = mn22_numeric_to_mn07.get(mn22_code, set())
+        mn07_codes = mn22_to_mn07.get(mn22_code, set())
         for mn07_code in mn07_codes:
             mn07_std = conn.execute(
                 "SELECT id FROM standards WHERE framework='MN-2007' AND code=?",
@@ -1198,16 +1225,14 @@ def bridge_mn2007(conn, standards_map):
                 )
                 new_count += 1
 
-    # Also: HS correlations sheet has direct MN-2022 → MN-2007 column
+    # HS correlations direct MN-2022 → MN-2007 column
     hs_f = get_data_file_by_keywords("Correlations", "MN")
     if hs_f:
         try:
-            xls = pd.ExcelFile(hs_f)
-            for sheet in xls.sheet_names:
+            for sheet in pd.ExcelFile(hs_f).sheet_names:
                 if 'grade 9' not in sheet.lower() and 'cca' not in sheet.lower():
                     continue
                 df = pd.read_excel(hs_f, sheet_name=sheet, header=None)
-                # HS sheet: col 3 = MN-2022, col 8 = MN-2007
                 for i in range(5, len(df)):
                     mn22_code = clean_text(df.iloc[i, 3])
                     mn07_code = clean_text(df.iloc[i, 8])
@@ -1215,48 +1240,28 @@ def bridge_mn2007(conn, standards_map):
                         continue
                     if not re.match(r'^\d+\.\d+', mn22_code) or not re.match(r'^\d+\.\d+', mn07_code):
                         continue
-
-                    # Find modules aligned to this MN-2022 code
-                    mn22_std = conn.execute(
-                        "SELECT id FROM standards WHERE framework='MN-2022' AND code=?",
-                        (mn22_code,)
-                    ).fetchone()
+                    mn22_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2022' AND code=?", (mn22_code,)).fetchone()
                     if not mn22_std:
                         continue
-
-                    mods = conn.execute(
-                        "SELECT module_id FROM cpm_standard_alignments WHERE standard_id=?",
-                        (mn22_std[0],)
-                    ).fetchall()
-
-                    # Find/create MN-2007 standard
-                    mn07_std = conn.execute(
-                        "SELECT id FROM standards WHERE framework='MN-2007' AND code=?",
-                        (mn07_code,)
-                    ).fetchone()
+                    mods = conn.execute("SELECT module_id FROM cpm_standard_alignments WHERE standard_id=?", (mn22_std[0],)).fetchall()
+                    mn07_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2007' AND code=?", (mn07_code,)).fetchone()
                     if not mn07_std:
                         new_id = max(standards_map.values()) + 1 if standards_map else 1
                         standards_map[('MN-2007', mn07_code)] = new_id
-                        grade = mn07_code.split('.')[0]
-                        conn.execute(
-                            "INSERT OR IGNORE INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
-                            (new_id, 'MN-2007', mn07_code, grade)
-                        )
+                        conn.execute("INSERT OR IGNORE INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
+                                     (new_id, 'MN-2007', mn07_code, mn07_code.split('.')[0]))
                         mn07_std_id = new_id
                     else:
                         mn07_std_id = mn07_std[0]
-
                     for (mid,) in mods:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
-                            (mid, mn07_std_id, 'bridged_via_mn2022_hs')
-                        )
+                        conn.execute("INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                                     (mid, mn07_std_id, 'bridged_via_mn2022_hs'))
                         new_count += 1
         except Exception as e:
-            print(f"  HS MN-2007 bridge error: {e}")
+            print(f"  HS bridge error: {e}")
 
     conn.commit()
-    print(f"  Bridged {new_count} MN-2007 alignments via MN-2022 topic clusters")
+    print(f"  Bridged {new_count} MN-2007 alignments (via CCSS + MN-2022 clusters)")
 
 # ── 6. Propagate alignments across frameworks ──
 
