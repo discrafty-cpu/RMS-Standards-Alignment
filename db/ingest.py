@@ -1193,8 +1193,12 @@ def main():
     print("\n5b. Ingesting CCSS alignments from PDF correlation docs...")
     ingest_pdf_ccss_alignments(conn)
 
-    print("\n6. Propagating alignments across frameworks via clusters...")
-    propagate_alignments(conn)
+    # NOTE: Cluster-based propagation disabled — it was too broad, creating
+    # false alignments (one lesson mapped to 50+ standards). The direct
+    # CPM correlations + CCSS lesson guide data is the reliable source.
+    # print("\n6. Propagating alignments across frameworks via clusters...")
+    # propagate_alignments(conn)
+    print("\n6. Skipping cluster propagation (using direct alignments only)")
 
     # Summary
     print("\n=== Database Summary ===")
