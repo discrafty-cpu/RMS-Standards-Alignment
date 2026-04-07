@@ -48,13 +48,22 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 .tag-cpm{background:#ede9fe;color:#7c3aed}
 .tag-lesson{background:#dbeafe;color:#1e40af}
 
-/* Strength indicators */
-.str{display:inline-block;font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;margin-left:3px;vertical-align:middle;letter-spacing:.3px}
-.str-strong{background:#dcfce7;color:#15803d}
-.str-medium{background:#fef3c7;color:#92400e}
-
 .card{background:#fff;border:1px solid #dfe3e8;border-radius:8px;padding:16px;margin-bottom:16px}
 .card h2{font-size:16px;margin-bottom:8px}
+
+/* Heatmap */
+.heatmap-wrap{overflow-x:auto;margin-bottom:16px}
+.heatmap{border-collapse:collapse;font-size:11px;min-width:100%}
+.heatmap th,.heatmap td{border:1px solid #dfe3e8;padding:0;text-align:center}
+.heatmap th{background:#f3f4f6;padding:4px 6px;font-weight:700;font-size:10px;white-space:nowrap}
+.heatmap th.row-hdr{text-align:left;padding:4px 8px;font-size:11px;min-width:90px;max-width:120px;white-space:normal;position:sticky;left:0;background:#f3f4f6;z-index:3}
+.heatmap th.corner{position:sticky;left:0;z-index:4;background:#f3f4f6}
+.heatmap td.hm-cell{width:28px;min-width:28px;height:26px;cursor:default;position:relative}
+.hm-0{background:#fee2e2}.hm-1{background:#fef3c7}.hm-2{background:#d9f99d}.hm-3{background:#86efac}.hm-4{background:#22c55e}
+.hm-cell:hover{outline:2px solid #1e3a8a;outline-offset:-2px;z-index:2}
+.heatmap .ch-hdr{background:#1e3a8a;color:#fff;font-weight:700;text-align:center;padding:4px 6px;font-size:10px}
+.hm-legend{display:flex;gap:4px;align-items:center;font-size:11px;color:#6b7280;margin:8px 0}
+.hm-legend-box{width:18px;height:14px;border:1px solid #dfe3e8;border-radius:2px;display:inline-block}
 
 .footer{text-align:center;padding:20px;color:#6b7280;font-size:12px}
 
@@ -75,6 +84,7 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
     <select id="viewBy" onchange="render()">
       <option value="grade">By Grade (standards view)</option>
       <option value="book">By CPM Book (course view)</option>
+      <option value="heatmap">Heatmap (global view)</option>
     </select>
   </div>
   <div class="group">
@@ -93,7 +103,7 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
     <label>CPM Book</label>
     <select id="bookSel" onchange="render()"></select>
   </div>
-  <div class="group">
+  <div class="group" id="showGroup">
     <label>Show</label>
     <select id="showSel" onchange="render()">
       <option value="all">All Standards</option>
@@ -139,8 +149,6 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 <div class="footer">
   <b>Data sources:</b> CPM MN 2022 Correlations (CC1-3 + CCA/CCG/CCA2), CPM CCSS Alignment PDFs (CC2, CC3), MN Dept of Education Official Standards Spreadsheet<br>
   <b>Note:</b> "No alignment" means CPM's official correlation documents don't list that lesson for that standard. The lesson content may still be related — check CPM's eBook for details.<br>
-  Alignment tags show source: <span class="tag tag-cpm">MN Corr</span> = CPM MN correlation doc &nbsp; <span class="tag tag-lesson">CCSS</span> = CPM CCSS lesson guide/PDF<br>
-  Correlation strength: <span class="str str-strong">STRONG</span> = Direct mapping from CPM's own correlation documents &nbsp; <span class="str str-medium">MEDIUM</span> = Inferred via CCSS or MN-2022 cross-reference bridge &nbsp; (hover any tag for details)<br>
   Built by Drummond Math Solutions
 </div>
 
@@ -148,20 +156,12 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 let D, stdI={}, modI={}, s2m={}, m2s={};
 function L(map,id){return map[String(id)]||[]}
 
-function strength(src){
-  if(!src) return {label:'?',cls:'str-medium'};
-  if(src==='bridged_via_content') return {label:'INFERRED',cls:'str-medium'};
-  if(src.startsWith('bridged_via')) return {label:'MEDIUM',cls:'str-medium'};
-  return {label:'STRONG',cls:'str-strong'};
-}
-
 function downloadFile(filename){
   if(!filename) return;
   window.open('downloads/'+filename,'_blank');
 }
 
 function exportCurrentCSV(){
-  // Export whatever table is currently displayed as CSV
   const tables=document.querySelectorAll('#mainContent table');
   if(!tables.length){alert('Nothing to export. Select a view first.');return;}
   let csv='';
@@ -192,12 +192,10 @@ async function init(){
   s2m=D.standard_to_modules||{};
   m2s=D.module_to_standards||{};
 
-  // Populate grade dropdown
   const gs=['6','7','8','9'];
   const gradeSel=document.getElementById('gradeSel');
   gs.forEach(g=>gradeSel.add(new Option(g==='9'?'Grades 9-11 (HS)':'Grade '+g,g)));
 
-  // Populate book dropdown
   const bookSel=document.getElementById('bookSel');
   D.cpm_courses.forEach(c=>{
     const n=D.cpm_modules.filter(m=>m.course_id===c.id).length;
@@ -206,8 +204,9 @@ async function init(){
 
   document.getElementById('viewBy').addEventListener('change',()=>{
     const v=document.getElementById('viewBy').value;
-    document.getElementById('gradeGroup').style.display=v==='grade'?'':'none';
-    document.getElementById('bookGroup').style.display=v==='book'?'':'none';
+    document.getElementById('gradeGroup').style.display=(v==='grade')?'':'none';
+    document.getElementById('bookGroup').style.display=(v==='book')?'':'none';
+    document.getElementById('showGroup').style.display=(v==='heatmap')?'none':'';
   });
 
   render();
@@ -216,7 +215,8 @@ async function init(){
 function render(){
   const view=document.getElementById('viewBy').value;
   if(view==='grade') renderByGrade();
-  else renderByBook();
+  else if(view==='book') renderByBook();
+  else renderHeatmap();
 }
 
 function renderByGrade(){
@@ -224,20 +224,16 @@ function renderByGrade(){
   const grade=document.getElementById('gradeSel').value;
   const show=document.getElementById('showSel').value;
 
-  // Get all standards for this framework+grade
   let stds=D.standards.filter(s=>s.framework===fw&&s.grade===grade);
 
-  // Calculate coverage
   const total=stds.length;
   let covered=0, gaps=0;
   stds.forEach(s=>{if(L(s2m,s.id).length>0) covered++; else gaps++;});
   const pct=total?Math.round(covered/total*100):0;
 
-  // Filter
   if(show==='gaps') stds=stds.filter(s=>L(s2m,s.id).length===0);
   else if(show==='covered') stds=stds.filter(s=>L(s2m,s.id).length>0);
 
-  // Which CPM books cover this grade?
   const gradeBooks={
     '6':['CC1'],'7':['CC2'],'8':['CC3'],
     '9':['CCA','CCG','CCA2','INT1','INT2','INT3']
@@ -260,7 +256,6 @@ function renderByGrade(){
     <div class="covbar"><div class="fill ${pct>=80?'green':pct>=50?'yellow':'red'}" style="width:${pct}%"></div><div class="pct">${pct}% Covered</div></div>
   `;
 
-  // Group by domain
   const byDomain={};
   stds.forEach(s=>{const d=s.domain||'Other';if(!byDomain[d])byDomain[d]=[];byDomain[d].push(s);});
 
@@ -279,12 +274,10 @@ function renderByGrade(){
       const mods=L(s2m,s.id);
       const isGap=mods.length===0;
 
-      // Build CPM lesson tags
       let cpmCol;
       if(isGap){
         cpmCol='<span style="color:#b91c1c;font-size:12px;font-weight:600">NOT COVERED — No CPM lesson aligns to this standard</span>';
       } else {
-        // Deduplicate by course+lesson
         const seen=new Set();
         const tags=[];
         mods.forEach(m=>{
@@ -295,8 +288,7 @@ function renderByGrade(){
           seen.add(key);
           const label=mod.lesson||mod.section||'Ch'+mod.chapter;
           const concepts=mod.core_concepts?(` — ${mod.core_concepts.slice(0,40)}`):'';
-          const st=strength(m.source);
-          tags.push(`<span class="tag tag-cpm" title="${(mod.core_concepts||'')+' | Source: '+(m.source||'')}">${m.course_id} ${label}${concepts}<span class="str ${st.cls}">${st.label}</span></span>`);
+          tags.push(`<span class="tag tag-cpm" title="${mod.core_concepts||''}">${m.course_id} ${label}${concepts}</span>`);
         });
         cpmCol=tags.slice(0,8).join(' ');
         if(tags.length>8) cpmCol+=` <span style="color:#6b7280;font-size:11px">+${tags.length-8} more</span>`;
@@ -324,16 +316,14 @@ function renderByBook(){
   if(!course){document.getElementById('mainContent').innerHTML='<p>Select a book.</p>';return;}
   const mods=D.cpm_modules.filter(m=>m.course_id===cid);
 
-  // What standards does this course cover?
   const coveredStdIds=new Set();
-  const modStdMap={};  // module_id → [standard objects]
+  const modStdMap={};
   mods.forEach(m=>{
     const stds=L(m2s,m.id).filter(s=>stdI[s.standard_id]&&stdI[s.standard_id].framework===fw);
     modStdMap[m.id]=stds;
     stds.forEach(s=>coveredStdIds.add(s.standard_id));
   });
 
-  // All standards in the relevant grades for this framework
   const gradeMap={'CC1':['6'],'CC2':['7'],'CC3':['8'],'CCA':['9'],'CCG':['9'],'CCA2':['9'],
     'INT1':['9'],'INT2':['9'],'INT3':['9'],'PC3':[],'CALC':[],'STATS':[]};
   const relevantGrades=new Set(gradeMap[cid]||[]);
@@ -361,7 +351,6 @@ function renderByBook(){
   }
 
   if(show!=='gaps'){
-    // Show modules with their standards
     h+=`<div class="card"><h2>What ${cid} Covers</h2>`;
     h+=`<table><thead><tr>
       <th style="width:50px">Ch</th>
@@ -379,7 +368,7 @@ function renderByBook(){
       }
       const stds=modStdMap[m.id]||[];
       const stdTags=stds.length>0
-        ? stds.reduce((acc,s)=>{if(!acc.seen.has(s.code)){acc.seen.add(s.code);const st=strength(s.source);acc.tags.push(`<span class="tag tag-lesson" title="Source: ${s.source||''}">${s.code}<span class="str ${st.cls}">${st.label}</span></span>`);}return acc;},{seen:new Set(),tags:[]}).tags.join(' ')
+        ? [...new Set(stds.map(s=>s.code))].map(c=>`<span class="tag tag-lesson">${c}</span>`).join(' ')
         : '<span style="color:#6b7280;font-size:11px">no '+fw+' alignment</span>';
 
       h+=`<tr>
@@ -392,7 +381,6 @@ function renderByBook(){
     h+='</tbody></table></div>';
   }
 
-  // Gap section
   if(gaps.length>0&&show!=='covered'){
     h+=`<div class="card" style="border-left:4px solid #b91c1c">
       <h2 style="color:#b91c1c">${gaps.length} ${fw} Standards NOT Covered by ${cid}</h2>
@@ -405,6 +393,154 @@ function renderByBook(){
     });
     h+='</tbody></table></div>';
   }
+
+  document.getElementById('mainContent').innerHTML=h;
+}
+
+function renderHeatmap(){
+  const fw=document.getElementById('fwSel').value;
+
+  // Course order and grade mapping
+  const courseOrder=['CC1','CC2','CC3','CCA','CCG','CCA2'];
+  const courseGrade={'CC1':'6','CC2':'7','CC3':'8','CCA':'9','CCG':'9','CCA2':'9'};
+  const courses=D.cpm_courses.filter(c=>courseOrder.includes(c.id)).sort((a,b)=>courseOrder.indexOf(a.id)-courseOrder.indexOf(b.id));
+
+  // Get all relevant grades
+  const grades=['6','7','8','9'];
+
+  // Build chapter→lessons structure for each course
+  const courseChapters={};
+  courses.forEach(c=>{
+    const mods=D.cpm_modules.filter(m=>m.course_id===c.id);
+    const chapters={};
+    mods.forEach(m=>{
+      const ch=m.chapter||'?';
+      if(!chapters[ch]) chapters[ch]=[];
+      chapters[ch].push(m);
+    });
+    courseChapters[c.id]={chapters, mods};
+  });
+
+  // Get standards grouped by grade+domain
+  const stdRows=[];
+  const byGradeDomain={};
+  grades.forEach(g=>{
+    const stds=D.standards.filter(s=>s.framework===fw&&s.grade===g);
+    const domains={};
+    stds.forEach(s=>{
+      const d=s.domain||'Other';
+      if(!domains[d]) domains[d]=[];
+      domains[d].push(s);
+    });
+    byGradeDomain[g]=domains;
+    Object.keys(domains).forEach(d=>{
+      domains[d].forEach(s=>{
+        stdRows.push(s);
+      });
+    });
+  });
+
+  // Build module→standard lookup for quick heatmap cell calculation
+  // For each (standard_id, course_chapter) → count of lessons
+  const stdChapterCount={};
+  courses.forEach(c=>{
+    const mods=courseChapters[c.id].mods;
+    mods.forEach(m=>{
+      const stds=L(m2s,m.id).filter(s=>stdI[s.standard_id]&&stdI[s.standard_id].framework===fw);
+      stds.forEach(s=>{
+        const key=s.standard_id+'|'+c.id+'|'+m.chapter;
+        stdChapterCount[key]=(stdChapterCount[key]||0)+1;
+      });
+    });
+  });
+
+  // Compute overall stats
+  let totalStd=0, coveredStd=0;
+  stdRows.forEach(s=>{
+    totalStd++;
+    if(L(s2m,s.id).length>0) coveredStd++;
+  });
+  const pct=totalStd?Math.round(coveredStd/totalStd*100):0;
+
+  let h=`
+    <div class="card">
+      <h2>Standards Coverage Heatmap — ${fw} vs CPM Chapters</h2>
+      <p style="color:#6b7280;font-size:13px">Each cell shows how many lessons in that chapter align to that standard. Rows = standards, columns = CPM chapters.</p>
+    </div>
+
+    <div class="summary">
+      <div class="scard b"><div class="num">${totalStd}</div><div class="lbl">Total ${fw} Standards</div></div>
+      <div class="scard g"><div class="num">${coveredStd}</div><div class="lbl">Covered by CPM</div></div>
+      <div class="scard ${(totalStd-coveredStd)?'r':'g'}"><div class="num">${totalStd-coveredStd}</div><div class="lbl">Gaps</div></div>
+      <div class="scard"><div class="num">${pct}%</div><div class="lbl">Overall Coverage</div></div>
+    </div>
+    <div class="covbar"><div class="fill ${pct>=80?'green':pct>=50?'yellow':'red'}" style="width:${pct}%"></div><div class="pct">${pct}% Covered</div></div>
+
+    <div class="hm-legend">
+      <span>Lessons per chapter:</span>
+      <span class="hm-legend-box hm-0"></span> 0 (gap)
+      <span class="hm-legend-box hm-1"></span> 1
+      <span class="hm-legend-box hm-2"></span> 2
+      <span class="hm-legend-box hm-3"></span> 3
+      <span class="hm-legend-box hm-4"></span> 4+
+    </div>
+  `;
+
+  // Build one heatmap per course
+  courses.forEach(c=>{
+    const grade=courseGrade[c.id];
+    const stds=D.standards.filter(s=>s.framework===fw&&s.grade===grade);
+    if(!stds.length) return;
+
+    const chapterNums=Object.keys(courseChapters[c.id].chapters).sort((a,b)=>Number(a)-Number(b));
+    const domains={};
+    stds.forEach(s=>{
+      const d=s.domain||'Other';
+      if(!domains[d]) domains[d]=[];
+      domains[d].push(s);
+    });
+
+    // Course coverage stats
+    let cCov=0;
+    stds.forEach(s=>{
+      const mods=L(s2m,s.id).filter(m=>m.course_id===c.id);
+      if(mods.length>0) cCov++;
+    });
+    const cPct=stds.length?Math.round(cCov/stds.length*100):0;
+
+    h+=`<div class="card">
+      <h2>${c.name} (${c.id}) <span style="font-weight:400;font-size:13px;color:#6b7280">Grade ${grade==='9'?'9-11':grade} &middot; ${cCov}/${stds.length} standards covered (${cPct}%)</span></h2>
+      <div class="heatmap-wrap"><table class="heatmap">`;
+
+    // Header row: corner + chapter numbers
+    h+=`<thead><tr><th class="corner">Standard</th>`;
+    chapterNums.forEach(ch=>{
+      h+=`<th class="ch-hdr">Ch${ch}</th>`;
+    });
+    h+=`<th style="padding:4px 8px;font-size:10px;min-width:50px">Total</th></tr></thead><tbody>`;
+
+    // Rows grouped by domain
+    Object.keys(domains).forEach(domain=>{
+      // Domain separator
+      h+=`<tr><td colspan="${chapterNums.length+2}" style="background:#e0e7ff;font-weight:700;font-size:11px;padding:4px 8px;text-align:left;color:#1e3a8a">${domain}</td></tr>`;
+
+      domains[domain].forEach(s=>{
+        let rowTotal=0;
+        h+=`<tr><th class="row-hdr" title="${s.description||''}">${s.code}</th>`;
+        chapterNums.forEach(ch=>{
+          const count=stdChapterCount[s.id+'|'+c.id+'|'+ch]||0;
+          rowTotal+=count;
+          const cls=count===0?'hm-0':count===1?'hm-1':count===2?'hm-2':count===3?'hm-3':'hm-4';
+          h+=`<td class="hm-cell ${cls}" title="${s.code} × Ch${ch}: ${count} lesson${count!==1?'s':''}">${count||''}</td>`;
+        });
+        const totCls=rowTotal===0?'hm-0':rowTotal<=2?'hm-1':rowTotal<=4?'hm-2':rowTotal<=6?'hm-3':'hm-4';
+        h+=`<td class="hm-cell ${totCls}" style="font-weight:700" title="Total: ${rowTotal} lessons">${rowTotal}</td>`;
+        h+=`</tr>`;
+      });
+    });
+
+    h+=`</tbody></table></div></div>`;
+  });
 
   document.getElementById('mainContent').innerHTML=h;
 }
