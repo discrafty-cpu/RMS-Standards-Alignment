@@ -48,6 +48,11 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 .tag-cpm{background:#ede9fe;color:#7c3aed}
 .tag-lesson{background:#dbeafe;color:#1e40af}
 
+/* Strength indicators */
+.str{display:inline-block;font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;margin-left:3px;vertical-align:middle;letter-spacing:.3px}
+.str-strong{background:#dcfce7;color:#15803d}
+.str-medium{background:#fef3c7;color:#92400e}
+
 .card{background:#fff;border:1px solid #dfe3e8;border-radius:8px;padding:16px;margin-bottom:16px}
 .card h2{font-size:16px;margin-bottom:8px}
 
@@ -135,12 +140,20 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
   <b>Data sources:</b> CPM MN 2022 Correlations (CC1-3 + CCA/CCG/CCA2), CPM CCSS Alignment PDFs (CC2, CC3), MN Dept of Education Official Standards Spreadsheet<br>
   <b>Note:</b> "No alignment" means CPM's official correlation documents don't list that lesson for that standard. The lesson content may still be related — check CPM's eBook for details.<br>
   Alignment tags show source: <span class="tag tag-cpm">MN Corr</span> = CPM MN correlation doc &nbsp; <span class="tag tag-lesson">CCSS</span> = CPM CCSS lesson guide/PDF<br>
+  Correlation strength: <span class="str str-strong">STRONG</span> = Direct mapping from CPM's own correlation documents &nbsp; <span class="str str-medium">MEDIUM</span> = Inferred via CCSS or MN-2022 cross-reference bridge &nbsp; (hover any tag for details)<br>
   Built by Drummond Math Solutions
 </div>
 
 <script>
 let D, stdI={}, modI={}, s2m={}, m2s={};
 function L(map,id){return map[String(id)]||[]}
+
+function strength(src){
+  if(!src) return {label:'?',cls:'str-medium'};
+  if(src==='bridged_via_content') return {label:'INFERRED',cls:'str-medium'};
+  if(src.startsWith('bridged_via')) return {label:'MEDIUM',cls:'str-medium'};
+  return {label:'STRONG',cls:'str-strong'};
+}
 
 function downloadFile(filename){
   if(!filename) return;
@@ -282,7 +295,8 @@ function renderByGrade(){
           seen.add(key);
           const label=mod.lesson||mod.section||'Ch'+mod.chapter;
           const concepts=mod.core_concepts?(` — ${mod.core_concepts.slice(0,40)}`):'';
-          tags.push(`<span class="tag tag-cpm" title="${mod.core_concepts||''}">${m.course_id} ${label}${concepts}</span>`);
+          const st=strength(m.source);
+          tags.push(`<span class="tag tag-cpm" title="${(mod.core_concepts||'')+' | Source: '+(m.source||'')}">${m.course_id} ${label}${concepts}<span class="str ${st.cls}">${st.label}</span></span>`);
         });
         cpmCol=tags.slice(0,8).join(' ');
         if(tags.length>8) cpmCol+=` <span style="color:#6b7280;font-size:11px">+${tags.length-8} more</span>`;
@@ -365,7 +379,7 @@ function renderByBook(){
       }
       const stds=modStdMap[m.id]||[];
       const stdTags=stds.length>0
-        ? [...new Set(stds.map(s=>s.code))].map(c=>`<span class="tag tag-lesson">${c}</span>`).join(' ')
+        ? stds.reduce((acc,s)=>{if(!acc.seen.has(s.code)){acc.seen.add(s.code);const st=strength(s.source);acc.tags.push(`<span class="tag tag-lesson" title="Source: ${s.source||''}">${s.code}<span class="str ${st.cls}">${st.label}</span></span>`);}return acc;},{seen:new Set(),tags:[]}).tags.join(' ')
         : '<span style="color:#6b7280;font-size:11px">no '+fw+' alignment</span>';
 
       h+=`<tr>

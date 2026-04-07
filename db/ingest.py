@@ -1136,8 +1136,18 @@ def bridge_mn2007(conn, standards_map):
     ccss_to_mn07 = {}
     mn22_to_mn07 = {}
 
-    # MN-2022 strand letter → numeric strand number
-    strand_map = {'DP': '1', 'GM': '2', 'N': '3', 'A': '3', 'PR': '3'}
+    def strip_ccss_cluster(code):
+        """Strip single-letter cluster from CCSS code: 6.G.A.1 → 6.G.1, 7.NS.A.1.D → 7.NS.1d"""
+        parts = code.split('.')
+        # Pattern: grade.domain.cluster.standard where cluster is 1-letter A-F
+        if len(parts) >= 4 and re.match(r'^[A-F]$', parts[2]):
+            return parts[0] + '.' + parts[1] + '.' + '.'.join(parts[3:])
+        return code
+
+    def extract_ccss_from_text(text):
+        """Extract CCSS code from notes like 'Review skills needed for 6.NS.1' or 'Prep for 7.SP.C.8.A'"""
+        m = re.search(r'(\d+\.[A-Z]+(?:\.[A-Z])?(?:\.\d+)+[a-z]?)', text)
+        return m.group(1) if m else None
 
     for _, row in xref.iterrows():
         grade = str(row.get('Grade', '')).strip()
@@ -1148,32 +1158,109 @@ def bridge_mn2007(conn, standards_map):
         if not mn07_codes:
             continue
 
-        # Map each CCSS code in this cluster → MN-2007 codes
+        # Map each CCSS code in this cluster → MN-2007 codes (both full and short form)
         for ccss in ccss_codes:
-            if ccss not in ccss_to_mn07:
-                ccss_to_mn07[ccss] = set()
-            ccss_to_mn07[ccss].update(mn07_codes)
+            for variant in {ccss, strip_ccss_cluster(ccss), ccss.lower()}:
+                if variant not in ccss_to_mn07:
+                    ccss_to_mn07[variant] = set()
+                ccss_to_mn07[variant].update(mn07_codes)
 
-        # Map MN-2022 strand codes → find matching numeric codes → MN-2007
+        # Map MN-2022 strand-letter codes to the cluster's MN-2007 codes
+        # Store by strand-letter code for later lookup
         for strand_code in mn22_strand_codes:
-            parts = strand_code.split('.')
-            if len(parts) < 4:
-                continue
-            strand_letter = parts[1]
-            strand_num = strand_map.get(strand_letter)
-            if not strand_num:
-                continue
-            # The anchor standard number is parts[2]
-            anchor = parts[2]
-            # Match numeric codes: grade.strand_num.anchor.X
-            pattern = f"{grade}.{strand_num}.{anchor}.%"
-            for (num_code,) in conn.execute(
-                "SELECT code FROM standards WHERE framework='MN-2022' AND grade=? AND code LIKE ?",
-                (grade, pattern)
-            ).fetchall():
-                if num_code not in mn22_to_mn07:
-                    mn22_to_mn07[num_code] = set()
-                mn22_to_mn07[num_code].update(mn07_codes)
+            if strand_code not in mn22_to_mn07:
+                mn22_to_mn07[strand_code] = set()
+            mn22_to_mn07[strand_code].update(mn07_codes)
+
+    # Build MN-2022 DOMAIN → MN-2007 codes mapping for numeric codes
+    # MN-2022 numeric codes use domain names that map to xref clusters
+    mn22_domain_to_mn07 = {}
+    for _, row in xref.iterrows():
+        grade = str(row.get('Grade', '')).strip()
+        mn07_codes = split_codes(row.get('MN 2007 Codes'))
+        cluster_name = str(row.get('Topic Cluster', '')).strip()
+        if not mn07_codes or not cluster_name:
+            continue
+        key = (grade, cluster_name)
+        if key not in mn22_domain_to_mn07:
+            mn22_domain_to_mn07[key] = set()
+        mn22_domain_to_mn07[key].update(mn07_codes)
+
+    # Map MN-2022 numeric standard domains to xref cluster names
+    # This maps MN-2022 domain names → xref topic cluster names
+    domain_to_cluster = {
+        # Grade 6
+        ('6', 'Data and Probability'): ['Statistics & Data'],
+        ('6', 'Spatial Reasoning'): ['Area & Geometry', 'Coordinate Plane'],
+        ('6', 'Patterns and Relationships'): ['Fractions, Decimals & Percents', 'Integers & Rational Numbers',
+                                                'Ratios & Rates', 'Percents', 'Expressions & Equations'],
+        # Grade 7
+        ('7', 'Data and Probability'): ['Statistics & Sampling', 'Probability'],
+        ('7', 'Spatial Reasoning'): ['Scale Drawings & Similar Figures', 'Circles & Circumference',
+                                      'Area, Surface Area & Volume'],
+        ('7', 'Patterns and Relationships'): ['Operations with Rational Numbers', 'Percent Problems',
+                                                'Proportional Relationships', 'Equations & Inequalities'],
+        # Grade 8
+        ('8', 'Data and Probability'): ['Scatter Plots & Bivariate Data'],
+        ('8', 'Spatial Reasoning'): ['Transformations & Congruence', 'Pythagorean Theorem',
+                                      'Volume — Cylinders, Cones & Spheres'],
+        ('8', 'Patterns and Relationships'): ['Real Numbers & Irrational Numbers', 'Scientific Notation',
+                                                'Linear Equations & Slope', 'Slope & Rate of Change',
+                                                'Functions', 'Systems of Equations'],
+    }
+
+    # For "Patterns and Relationships" which maps to multiple MN-2007 domains,
+    # use description keywords to narrow the match
+    def mn22_description_to_clusters(grade, domain, desc):
+        """Use MN-2022 benchmark description to find best-matching xref cluster(s)."""
+        desc_lower = (desc or '').lower()
+        if domain == 'Patterns and Relationships':
+            if grade == '6':
+                if any(w in desc_lower for w in ['ratio', 'rate', 'proportion', 'unit rate']):
+                    return ['Ratios & Rates']
+                if any(w in desc_lower for w in ['percent']):
+                    return ['Percents']
+                if any(w in desc_lower for w in ['expression', 'equation', 'variable', 'inequalit', 'evaluate']):
+                    return ['Expressions & Equations']
+                if any(w in desc_lower for w in ['integer', 'negative', 'positive', 'absolute', 'number line', 'ordered pair']):
+                    return ['Integers & Rational Numbers']
+                if any(w in desc_lower for w in ['fraction', 'decimal', 'mixed number', 'multipl', 'divid', 'factor', 'gcf', 'lcm', 'prime', 'estimat']):
+                    return ['Fractions, Decimals & Percents']
+            elif grade == '7':
+                if any(w in desc_lower for w in ['proportion', 'constant of']):
+                    return ['Proportional Relationships']
+                if any(w in desc_lower for w in ['percent', 'markup', 'discount', 'tax', 'tip']):
+                    return ['Percent Problems']
+                if any(w in desc_lower for w in ['equation', 'inequalit']):
+                    return ['Equations & Inequalities']
+                if any(w in desc_lower for w in ['rational', 'add', 'subtract', 'multipl', 'divid', 'fraction', 'decimal', 'negative']):
+                    return ['Operations with Rational Numbers']
+            elif grade == '8':
+                if any(w in desc_lower for w in ['function', 'input', 'output', 'linear', 'nonlinear']):
+                    return ['Functions']
+                if any(w in desc_lower for w in ['system']):
+                    return ['Systems of Equations']
+                if any(w in desc_lower for w in ['slope', 'rate of change', 'y-intercept', 'graph']):
+                    return ['Linear Equations & Slope', 'Slope & Rate of Change']
+                if any(w in desc_lower for w in ['scientific notation', 'exponent']):
+                    return ['Scientific Notation']
+                if any(w in desc_lower for w in ['irrational', 'real number', 'square root']):
+                    return ['Real Numbers & Irrational Numbers']
+        # Fall back to full domain mapping
+        return domain_to_cluster.get((grade, domain), [])
+
+    # Now build the actual mn22-numeric → mn07 map using descriptions
+    mn22_stds = conn.execute(
+        "SELECT code, grade, domain, description FROM standards WHERE framework='MN-2022' AND grade IN ('6','7','8')"
+    ).fetchall()
+    for (code, grade, domain, desc) in mn22_stds:
+        clusters = mn22_description_to_clusters(grade, domain or '', desc)
+        for cluster_name in clusters:
+            mn07_set = mn22_domain_to_mn07.get((grade, cluster_name), set())
+            if mn07_set:
+                if code not in mn22_to_mn07:
+                    mn22_to_mn07[code] = set()
+                mn22_to_mn07[code].update(mn07_set)
 
     new_count = 0
 
@@ -1187,10 +1274,20 @@ def bridge_mn2007(conn, standards_map):
         # Try exact match first
         mn07_codes = ccss_to_mn07.get(ccss_code, set())
         if not mn07_codes:
+            # Try stripped (short-form) match: 6.G.A.1 → 6.G.1
+            mn07_codes = ccss_to_mn07.get(strip_ccss_cluster(ccss_code), set())
+        if not mn07_codes:
+            # Try extracting code from text notes like "Review skills needed for 6.NS.1"
+            extracted = extract_ccss_from_text(ccss_code)
+            if extracted:
+                mn07_codes = ccss_to_mn07.get(extracted, set())
+                if not mn07_codes:
+                    mn07_codes = ccss_to_mn07.get(strip_ccss_cluster(extracted), set())
+        if not mn07_codes:
             # Try prefix match (e.g., 6.NS.B.4 → check 6.NS.B)
             prefix = '.'.join(ccss_code.split('.')[:3])
             for k, v in ccss_to_mn07.items():
-                if k.startswith(prefix):
+                if k.startswith(prefix) or strip_ccss_cluster(k).startswith(prefix):
                     mn07_codes.update(v)
                     break
         for mn07_code in mn07_codes:
@@ -1225,7 +1322,7 @@ def bridge_mn2007(conn, standards_map):
                 )
                 new_count += 1
 
-    # HS correlations direct MN-2022 → MN-2007 column
+    # HS correlations direct MN-2022 → MN-2007 column (supports multi-code values)
     hs_f = get_data_file_by_keywords("Correlations", "MN")
     if hs_f:
         try:
@@ -1235,30 +1332,111 @@ def bridge_mn2007(conn, standards_map):
                 df = pd.read_excel(hs_f, sheet_name=sheet, header=None)
                 for i in range(5, len(df)):
                     mn22_code = clean_text(df.iloc[i, 3])
-                    mn07_code = clean_text(df.iloc[i, 8])
-                    if not mn22_code or not mn07_code:
+                    mn07_raw = str(df.iloc[i, 8]).strip()
+                    if not mn22_code or mn07_raw == 'nan':
                         continue
-                    if not re.match(r'^\d+\.\d+', mn22_code) or not re.match(r'^\d+\.\d+', mn07_code):
+                    if not re.match(r'^\d+\.\d+', mn22_code):
+                        continue
+                    # Extract ALL MN-2007 codes from the cell (may have multiple, newline-separated)
+                    mn07_codes_found = re.findall(r'(\d+\.\d+\.\d+\.\d+)', mn07_raw)
+                    if not mn07_codes_found:
                         continue
                     mn22_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2022' AND code=?", (mn22_code,)).fetchone()
                     if not mn22_std:
                         continue
                     mods = conn.execute("SELECT module_id FROM cpm_standard_alignments WHERE standard_id=?", (mn22_std[0],)).fetchall()
-                    mn07_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2007' AND code=?", (mn07_code,)).fetchone()
-                    if not mn07_std:
-                        new_id = max(standards_map.values()) + 1 if standards_map else 1
-                        standards_map[('MN-2007', mn07_code)] = new_id
-                        conn.execute("INSERT OR IGNORE INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
-                                     (new_id, 'MN-2007', mn07_code, mn07_code.split('.')[0]))
-                        mn07_std_id = new_id
-                    else:
-                        mn07_std_id = mn07_std[0]
-                    for (mid,) in mods:
-                        conn.execute("INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
-                                     (mid, mn07_std_id, 'bridged_via_mn2022_hs'))
-                        new_count += 1
+                    for mn07_code in mn07_codes_found:
+                        mn07_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2007' AND code=?", (mn07_code,)).fetchone()
+                        if not mn07_std:
+                            new_id = conn.execute("SELECT COALESCE(MAX(id),0)+1 FROM standards").fetchone()[0]
+                            standards_map[('MN-2007', mn07_code)] = new_id
+                            conn.execute("INSERT INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
+                                         (new_id, 'MN-2007', mn07_code, mn07_code.split('.')[0]))
+                            mn07_std_id = new_id
+                        else:
+                            mn07_std_id = mn07_std[0]
+                        for (mid,) in mods:
+                            conn.execute("INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                                         (mid, mn07_std_id, 'bridged_via_mn2022_hs'))
+                            new_count += 1
         except Exception as e:
             print(f"  HS bridge error: {e}")
+
+    # Content-based bridge: for modules with NO alignment at all,
+    # match lesson title/concepts to MN-2007 domain keywords
+    unaligned = conn.execute("""
+        SELECT m.id, m.course_id, m.chapter, m.lesson, m.core_concepts
+        FROM cpm_modules m
+        WHERE m.id NOT IN (SELECT module_id FROM cpm_standard_alignments)
+        AND m.course_id IN ('CC1','CC2','CC3')
+    """).fetchall()
+
+    # Grade mapping for courses
+    course_grade = {'CC1': '6', 'CC2': '7', 'CC3': '8'}
+
+    # Keyword → MN-2007 domain mapping by grade
+    keyword_to_mn07 = {
+        '6': [
+            (['fraction', 'mixed number', 'multipl', 'divid', 'division', 'quotient', 'decimal', 'GCF', 'LCM'], '6.1.1'),
+            (['percent', 'discount', 'sale price', 'tax', 'tip'], '6.1.1.4'),
+            (['ratio', 'rate', 'unit rate', 'proportion', 'compare'], '6.1.2'),
+            (['integer', 'negative', 'positive', 'absolute', 'number line'], '6.1.3'),
+            (['expression', 'equation', 'variable', 'algebra', 'evaluate', 'like terms', 'simplif'], '6.2'),
+            (['area', 'parallelogram', 'triangle', 'trapezoid', 'rectangle', 'decompose', 'surface'], '6.3.1'),
+            (['coordinate', 'plot', 'ordered pair'], '6.3.2'),
+            (['statistic', 'median', 'MAD', 'spread', 'shape of data', 'mean absolute', 'display data', 'dot plot', 'histogram', 'box plot'], '6.4.1'),
+        ],
+        '7': [
+            (['fraction', 'mixed number', 'multipl', 'divid', 'rational', 'decimal'], '7.1.2'),
+            (['percent', 'markup', 'discount', 'sale', 'tax', 'tip', 'interest'], '7.2.2'),
+            (['ratio', 'rate', 'unit rate', 'proportion', 'compare', 'scale'], '7.2.1'),
+            (['expression', 'equation', 'inequalit', 'variable', 'algebra', 'like terms'], '7.2.3'),
+            (['area', 'surface', 'volume', 'circle', 'circumference'], '7.3.2'),
+            (['similar', 'scale drawing'], '7.3.1'),
+            (['probability', 'chance', 'event', 'outcome'], '7.4.3'),
+            (['statistic', 'sample', 'population', 'data', 'mean', 'median'], '7.4.1'),
+        ],
+        '8': [
+            (['irrational', 'real number', 'square root', 'cube root'], '8.1.1'),
+            (['scientific notation', 'exponent'], '8.1.2'),
+            (['slope', 'intercept', 'linear', 'rate of change', 'graph'], '8.2.1'),
+            (['function', 'input', 'output'], '8.2.2'),
+            (['equation', 'system', 'variable'], '8.2.3'),
+            (['transform', 'congruent', 'similar', 'reflect', 'rotate', 'translate', 'dilat'], '8.3.2'),
+            (['pythagorean', 'right triangle', 'hypotenuse', 'distance'], '8.3.1'),
+            (['volume', 'cylinder', 'cone', 'sphere'], '8.3.3'),
+            (['scatter', 'bivariate', 'correlation', 'data', 'statistic', 'MAD', 'spread'], '8.4.1'),
+        ],
+    }
+
+    content_count = 0
+    for (mod_id, course_id, chapter, lesson, concepts) in unaligned:
+        grade = course_grade.get(course_id)
+        if not grade:
+            continue
+        text = ((lesson or '') + ' ' + (concepts or '')).lower()
+        if not text.strip():
+            continue
+        rules = keyword_to_mn07.get(grade, [])
+        matched_prefixes = set()
+        for keywords, mn07_prefix in rules:
+            if any(re.search(r'\b' + re.escape(kw.lower()), text) for kw in keywords):
+                matched_prefixes.add(mn07_prefix)
+        for prefix in matched_prefixes:
+            # Find all MN-2007 standards matching this prefix
+            mn07_stds = conn.execute(
+                "SELECT id FROM standards WHERE framework='MN-2007' AND code LIKE ?",
+                (prefix + '%',)
+            ).fetchall()
+            for (std_id,) in mn07_stds:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                    (mod_id, std_id, 'bridged_via_content')
+                )
+                content_count += 1
+
+    if content_count:
+        print(f"  Content-based bridge: {content_count} additional MN-2007 alignments for {len(unaligned)} unaligned modules")
 
     conn.commit()
     print(f"  Bridged {new_count} MN-2007 alignments (via CCSS + MN-2022 clusters)")
