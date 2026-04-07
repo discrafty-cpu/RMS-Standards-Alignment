@@ -1114,6 +1114,150 @@ def ingest_pdf_ccss_alignments(conn):
     conn.commit()
     print(f"  Total new from PDFs: {total_new}")
 
+# ── 6. Bridge MN-2007 via topic cluster crosswalk ──
+
+def bridge_mn2007(conn, standards_map):
+    """
+    The cross-reference map groups MN-2007 and MN-2022 strand codes by topic cluster.
+    When a CPM module is aligned to an MN-2022 numeric code, we find the matching
+    topic cluster and add alignments to ALL MN-2007 codes in that same cluster.
+
+    This is a TARGETED bridge: each MN-2007 code only links to modules that cover
+    its topic cluster, not to every module in the grade.
+    """
+    f = get_data_file("DOK_Rigor_v4")
+    if not f:
+        print("  WARNING: DOK file not found")
+        return
+
+    xref = pd.read_excel(f, sheet_name="Cross-Reference Map")
+
+    # Build: MN-2022 numeric code → set of MN-2007 codes (via topic cluster)
+    # Step 1: For each cluster, get MN-2022 strand codes and MN-2007 codes
+    # Step 2: Map MN-2022 strand codes → MN-2022 numeric codes (same strand+grade)
+
+    # MN-2022 strand-to-numeric mapping by grade and strand number:
+    # Strand codes use letters: DP (strand 1), GM (strand 2), N/A (strand 3)
+    # Numeric codes use numbers: x.1.y.z (strand 1), x.2.y.z (strand 2), x.3.y.z (strand 3)
+    strand_letter_to_num = {
+        'DP': '1', 'GM': '2', 'N': '3', 'A': '3', 'PR': '3',
+    }
+
+    # Build cluster mapping
+    mn22_numeric_to_mn07 = {}  # MN-2022 numeric code → [MN-2007 codes]
+    new_count = 0
+
+    for _, row in xref.iterrows():
+        grade = str(row.get('Grade', '')).strip()
+        mn07_codes = split_codes(row.get('MN 2007 Codes'))
+        mn22_strand_codes = split_codes(row.get('MN 2022 Codes'))
+
+        if not mn07_codes:
+            continue
+
+        # For each MN-2022 strand code, find the numeric equivalent
+        # E.g., 6.GM.1.1 → strand GM → numeric strand 2 → look for 6.2.x.x codes
+        for strand_code in mn22_strand_codes:
+            parts = strand_code.split('.')
+            if len(parts) < 2:
+                continue
+            strand_letter = parts[1]  # e.g., 'GM', 'DP', 'N'
+            strand_num = strand_letter_to_num.get(strand_letter)
+            if not strand_num:
+                continue
+
+            # Find all MN-2022 numeric codes for this grade and strand
+            numeric_codes = conn.execute(
+                "SELECT id, code FROM standards WHERE framework='MN-2022' AND grade=? AND code LIKE ?",
+                (grade, f"{grade}.{strand_num}.%")
+            ).fetchall()
+
+            for (num_id, num_code) in numeric_codes:
+                if num_code not in mn22_numeric_to_mn07:
+                    mn22_numeric_to_mn07[num_code] = set()
+                mn22_numeric_to_mn07[num_code].update(mn07_codes)
+
+    # Now: for each CPM module with an MN-2022 alignment, add MN-2007 alignments
+    mn22_alignments = conn.execute("""
+        SELECT a.module_id, s.code FROM cpm_standard_alignments a
+        JOIN standards s ON a.standard_id = s.id
+        WHERE s.framework = 'MN-2022'
+    """).fetchall()
+
+    for (mod_id, mn22_code) in mn22_alignments:
+        mn07_codes = mn22_numeric_to_mn07.get(mn22_code, set())
+        for mn07_code in mn07_codes:
+            mn07_std = conn.execute(
+                "SELECT id FROM standards WHERE framework='MN-2007' AND code=?",
+                (mn07_code,)
+            ).fetchone()
+            if mn07_std:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                    (mod_id, mn07_std[0], 'bridged_via_mn2022')
+                )
+                new_count += 1
+
+    # Also: HS correlations sheet has direct MN-2022 → MN-2007 column
+    hs_f = get_data_file_by_keywords("Correlations", "MN")
+    if hs_f:
+        try:
+            xls = pd.ExcelFile(hs_f)
+            for sheet in xls.sheet_names:
+                if 'grade 9' not in sheet.lower() and 'cca' not in sheet.lower():
+                    continue
+                df = pd.read_excel(hs_f, sheet_name=sheet, header=None)
+                # HS sheet: col 3 = MN-2022, col 8 = MN-2007
+                for i in range(5, len(df)):
+                    mn22_code = clean_text(df.iloc[i, 3])
+                    mn07_code = clean_text(df.iloc[i, 8])
+                    if not mn22_code or not mn07_code:
+                        continue
+                    if not re.match(r'^\d+\.\d+', mn22_code) or not re.match(r'^\d+\.\d+', mn07_code):
+                        continue
+
+                    # Find modules aligned to this MN-2022 code
+                    mn22_std = conn.execute(
+                        "SELECT id FROM standards WHERE framework='MN-2022' AND code=?",
+                        (mn22_code,)
+                    ).fetchone()
+                    if not mn22_std:
+                        continue
+
+                    mods = conn.execute(
+                        "SELECT module_id FROM cpm_standard_alignments WHERE standard_id=?",
+                        (mn22_std[0],)
+                    ).fetchall()
+
+                    # Find/create MN-2007 standard
+                    mn07_std = conn.execute(
+                        "SELECT id FROM standards WHERE framework='MN-2007' AND code=?",
+                        (mn07_code,)
+                    ).fetchone()
+                    if not mn07_std:
+                        new_id = max(standards_map.values()) + 1 if standards_map else 1
+                        standards_map[('MN-2007', mn07_code)] = new_id
+                        grade = mn07_code.split('.')[0]
+                        conn.execute(
+                            "INSERT OR IGNORE INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
+                            (new_id, 'MN-2007', mn07_code, grade)
+                        )
+                        mn07_std_id = new_id
+                    else:
+                        mn07_std_id = mn07_std[0]
+
+                    for (mid,) in mods:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                            (mid, mn07_std_id, 'bridged_via_mn2022_hs')
+                        )
+                        new_count += 1
+        except Exception as e:
+            print(f"  HS MN-2007 bridge error: {e}")
+
+    conn.commit()
+    print(f"  Bridged {new_count} MN-2007 alignments via MN-2022 topic clusters")
+
 # ── 6. Propagate alignments across frameworks ──
 
 def propagate_alignments(conn):
@@ -1210,12 +1354,8 @@ def main():
     print("\n5b. Ingesting CCSS alignments from PDF correlation docs...")
     ingest_pdf_ccss_alignments(conn)
 
-    # NOTE: Cluster-based propagation disabled — it was too broad, creating
-    # false alignments (one lesson mapped to 50+ standards). The direct
-    # CPM correlations + CCSS lesson guide data is the reliable source.
-    # print("\n6. Propagating alignments across frameworks via clusters...")
-    # propagate_alignments(conn)
-    print("\n6. Skipping cluster propagation (using direct alignments only)")
+    print("\n6. Bridging MN-2007 alignments via topic cluster crosswalk...")
+    bridge_mn2007(conn, standards_map)
 
     # Summary
     print("\n=== Database Summary ===")
