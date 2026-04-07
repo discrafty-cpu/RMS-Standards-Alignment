@@ -290,7 +290,7 @@ function renderByGrade(){
 
       h+=`<tr class="${isGap?'gap-row':''}">
         <td><code>${s.code||''}</code></td>
-        <td style="font-size:12px;max-width:350px">${(s.description||s.topic||'').slice(0,220)}</td>
+        <td style="font-size:12px">${s.description||s.topic||''}</td>
         <td>${isGap?'<span class="tag tag-gap">GAP</span>':'<span class="tag tag-ok">COVERED</span>'}</td>
         <td>${cpmCol}</td>
       </tr>`;
@@ -387,7 +387,7 @@ function renderByBook(){
     gaps.forEach(s=>{
       h+=`<tr class="gap-row"><td><code>${s.code}</code></td>
         <td style="font-size:12px">${s.domain||''}</td>
-        <td style="font-size:12px">${(s.description||'').slice(0,200)}</td></tr>`;
+        <td style="font-size:12px">${s.description||''}</td></tr>`;
     });
     h+='</tbody></table></div>';
   }
