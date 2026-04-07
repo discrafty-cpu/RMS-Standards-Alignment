@@ -96,6 +96,35 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
       <option value="covered">Covered Only</option>
     </select>
   </div>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:end">
+  <button onclick="exportCurrentCSV()" style="padding:7px 14px;border:1px solid #dfe3e8;border-radius:6px;cursor:pointer;font-size:13px;background:#fff;white-space:nowrap">Export Current View (CSV)</button>
+  <div class="group">
+    <label>Downloads</label>
+    <select id="dlSel" onchange="downloadFile(this.value);this.selectedIndex=0">
+      <option value="">Download Spreadsheet...</option>
+      <optgroup label="Master">
+        <option value="CPM_Standards_Alignment_Master.xlsx">Complete Alignment (all grades + courses)</option>
+      </optgroup>
+      <optgroup label="By Grade (MN 2022)">
+        <option value="Grade_6_MN2022_Alignment.xlsx">Grade 6 MN-2022</option>
+        <option value="Grade_7_MN2022_Alignment.xlsx">Grade 7 MN-2022</option>
+        <option value="Grade_8_MN2022_Alignment.xlsx">Grade 8 MN-2022</option>
+        <option value="Grade_9-11_MN2022_Alignment.xlsx">Grade 9-11 MN-2022</option>
+      </optgroup>
+      <optgroup label="By CPM Book">
+        <option value="CC1_Alignment.xlsx">CC1 (Course 1)</option>
+        <option value="CC2_Alignment.xlsx">CC2 (Course 2)</option>
+        <option value="CC3_Alignment.xlsx">CC3 (Course 3)</option>
+        <option value="CCA_Alignment.xlsx">CCA (Algebra)</option>
+        <option value="CCG_Alignment.xlsx">CCG (Geometry)</option>
+        <option value="CCA2_Alignment.xlsx">CCA2 (Algebra 2)</option>
+        <option value="INT1_Alignment.xlsx">INT1 (Integrated 1)</option>
+        <option value="INT2_Alignment.xlsx">INT2 (Integrated 2)</option>
+        <option value="INT3_Alignment.xlsx">INT3 (Integrated 3)</option>
+      </optgroup>
+    </select>
+  </div>
+  </div>
 </div>
 
 <div class="main" id="mainContent">
@@ -112,6 +141,36 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 <script>
 let D, stdI={}, modI={}, s2m={}, m2s={};
 function L(map,id){return map[String(id)]||[]}
+
+function downloadFile(filename){
+  if(!filename) return;
+  window.open('downloads/'+filename,'_blank');
+}
+
+function exportCurrentCSV(){
+  // Export whatever table is currently displayed as CSV
+  const tables=document.querySelectorAll('#mainContent table');
+  if(!tables.length){alert('Nothing to export. Select a view first.');return;}
+  let csv='';
+  tables.forEach(tbl=>{
+    const rows=tbl.querySelectorAll('tr');
+    rows.forEach(tr=>{
+      const cells=tr.querySelectorAll('th,td');
+      const vals=[];
+      cells.forEach(c=>{
+        let t=c.innerText.replace(/"/g,'""').replace(/\n/g,' ');
+        vals.push('"'+t+'"');
+      });
+      csv+=vals.join(',')+'\n';
+    });
+    csv+='\n';
+  });
+  const blob=new Blob([csv],{type:'text/csv'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='alignment_export_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
 
 async function init(){
   D=await(await fetch('data.json')).json();
