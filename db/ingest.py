@@ -358,6 +358,23 @@ def ingest_official_mn2022(conn, standards_map):
     conn.commit()
     print(f"  Official MN-2022: {new_count} new, {updated_count} updated (total in spreadsheet: {len(df)})")
 
+    # Remove strand-based MN-2022 codes (6.DP.1.1, 6.GM.1.1, etc.) that are
+    # duplicates of the official numeric codes (6.1.1.1, 6.2.3.1, etc.).
+    # The strand-based codes came from the DOK file's MN-22 Database but
+    # the official MN spreadsheet uses numeric codes with full descriptions.
+    removed = conn.execute("""
+        DELETE FROM standards WHERE framework='MN-2022' AND code GLOB '*[A-Z]*'
+    """).rowcount
+    conn.commit()
+    print(f"  Removed {removed} duplicate strand-based MN-2022 codes (kept numeric codes with descriptions)")
+
+    # Also clean up cluster_standards referencing deleted standards
+    conn.execute("DELETE FROM cluster_standards WHERE standard_id NOT IN (SELECT id FROM standards)")
+    conn.commit()
+
+    # Skip the old cluster-linking code below
+    return
+
     # Add numeric MN-2022 codes to the same clusters as strand-based ones.
     # Both represent the same MN-2022 standards with different coding formats.
     # Strategy: within each grade, match by position (strand codes and numeric codes
