@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RMS Standards Alignment Viewer</title>
+<style>
+:root {
+  --bg: #f8f9fa; --card: #fff; --border: #dee2e6; --text: #212529;
+  --primary: #2563eb; --primary-light: #dbeafe; --primary-dark: #1d4ed8;
+  --green: #16a34a; --green-bg: #dcfce7; --red: #dc2626; --red-bg: #fee2e2;
+  --yellow: #ca8a04; --yellow-bg: #fef9c3; --gray: #6b7280; --gray-bg: #f3f4f6;
+  --orange: #ea580c; --orange-bg: #fff7ed;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+/* Header */
+.header { background: var(--primary-dark); color: #fff; padding: 12px 24px; display: flex;
+  align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .subtitle { font-size: 12px; opacity: 0.8; }
+.stats-bar { display: flex; gap: 16px; font-size: 13px; }
+.stat { background: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 4px; }
+.stat b { color: #93c5fd; }
+
+/* Tabs */
+.tabs { display: flex; background: var(--card); border-bottom: 2px solid var(--border);
+  padding: 0 24px; gap: 0; position: sticky; top: 48px; z-index: 99; }
+.tab { padding: 10px 20px; cursor: pointer; font-weight: 500; color: var(--gray);
+  border-bottom: 3px solid transparent; transition: all 0.15s; font-size: 13px; }
+.tab:hover { color: var(--text); background: var(--gray-bg); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* Content */
+.content { padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Filters bar */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center;
+  background: var(--card); padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
+.filters label { font-size: 12px; font-weight: 600; color: var(--gray); text-transform: uppercase; letter-spacing: 0.5px; }
+.filters select, .filters input[type=text] { padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 4px; font-size: 13px; background: #fff; }
+.filters select { min-width: 140px; }
+.filters input[type=text] { min-width: 200px; }
+.filter-group { display: flex; flex-direction: column; gap: 2px; }
+
+/* Cards */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; margin-bottom: 12px; }
+.card h3 { font-size: 15px; margin-bottom: 8px; }
+
+/* Coverage grid */
+.coverage-grid { display: grid; gap: 2px; font-size: 11px; overflow-x: auto; }
+.grid-cell { padding: 4px 6px; text-align: center; border-radius: 2px; min-width: 36px; }
+.grid-cell.covered { background: var(--green-bg); color: var(--green); font-weight: 600; }
+.grid-cell.gap { background: var(--red-bg); color: var(--red); }
+.grid-cell.over { background: var(--yellow-bg); color: var(--yellow); }
+.grid-cell.header { background: var(--gray-bg); color: var(--text); font-weight: 600; font-size: 10px; }
+.grid-cell.std-code { text-align: left; font-family: monospace; min-width: 100px; }
+
+/* Summary cards */
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.summary-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; text-align: center; }
+.summary-card .number { font-size: 28px; font-weight: 700; }
+.summary-card .label { font-size: 12px; color: var(--gray); margin-top: 4px; }
+.summary-card.good .number { color: var(--green); }
+.summary-card.warn .number { color: var(--yellow); }
+.summary-card.bad .number { color: var(--red); }
+
+/* Gap table */
+table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data th { background: var(--gray-bg); padding: 8px 10px; text-align: left;
+  font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 2px solid var(--border); position: sticky; top: 96px; }
+table.data td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.data tr:hover { background: var(--primary-light); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.badge.gap { background: var(--red-bg); color: var(--red); }
+.badge.covered { background: var(--green-bg); color: var(--green); }
+.badge.over { background: var(--yellow-bg); color: var(--yellow); }
+.badge.dok { background: var(--primary-light); color: var(--primary); }
+
+/* Module tree */
+.tree { font-size: 13px; }
+.tree-course { margin-bottom: 12px; }
+.tree-course > .tree-header { font-weight: 700; font-size: 15px; padding: 10px 12px;
+  background: var(--primary-dark); color: #fff; border-radius: 6px; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; }
+.tree-chapter { margin-left: 20px; margin-top: 4px; }
+.tree-chapter > .tree-header { font-weight: 600; padding: 6px 10px; background: var(--gray-bg);
+  border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; }
+.tree-section { margin-left: 20px; margin-top: 2px; }
+.tree-module { display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+  border-bottom: 1px solid #f0f0f0; }
+.tree-module:hover { background: var(--primary-light); }
+.tree-module input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; }
+.tree-module .lesson-id { font-family: monospace; min-width: 60px; font-weight: 500; }
+.tree-module .concepts { flex: 1; color: var(--gray); font-size: 12px; }
+.tree-module .std-count { font-size: 11px; color: var(--primary); font-weight: 600; }
+.tree-children { display: none; }
+.tree-children.open { display: block; }
+.toggle { font-size: 10px; margin-right: 6px; }
+.coverage-meter { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden;
+  width: 80px; display: inline-block; vertical-align: middle; margin-left: 8px; }
+.coverage-meter .fill { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+
+/* Skip impact */
+.impact-section { margin-top: 16px; }
+.impact-section h4 { margin-bottom: 8px; color: var(--red); }
+.impact-list { list-style: none; padding: 0; }
+.impact-list li { padding: 6px 10px; border-left: 3px solid var(--red); margin-bottom: 4px; background: var(--red-bg); border-radius: 0 4px 4px 0; }
+.impact-list.prereq li { border-left-color: var(--orange); background: var(--orange-bg); }
+.impact-list.lateral li { border-left-color: var(--primary); background: var(--primary-light); }
+
+/* Framework comparison */
+.comparison-grid { display: grid; grid-template-columns: 120px repeat(6, 1fr); gap: 1px;
+  background: var(--border); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.comparison-grid .cell { padding: 8px 10px; background: var(--card); }
+.comparison-grid .cell.header { background: var(--gray-bg); font-weight: 600; }
+.comparison-grid .cell.present { background: var(--green-bg); }
+.comparison-grid .cell.missing { background: var(--red-bg); color: var(--gray); font-style: italic; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .tabs { overflow-x: auto; }
+  .tab { white-space: nowrap; font-size: 12px; padding: 8px 12px; }
+  .content { padding: 12px; }
+  .filters { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>RMS Standards Alignment Viewer</h1>
+    <div class="subtitle">Drummond Math Solutions &middot; CPM Curriculum Coverage Analysis</div>
+  </div>
+  <div class="stats-bar" id="statsBar"></div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="dashboard">Coverage Dashboard</div>
+  <div class="tab" data-tab="gaps">Gap Analysis</div>
+  <div class="tab" data-tab="tracker">Module Tracker</div>
+  <div class="tab" data-tab="impact">Skip Impact</div>
+  <div class="tab" data-tab="compare">Framework Comparison</div>
+</div>
+
+<div class="content">
+  <!-- Tab 1: Coverage Dashboard -->
+  <div class="panel active" id="panel-dashboard">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Framework</label>
+        <select id="fw-filter">
+          <option value="MN-2022">MN 2022</option>
+          <option value="CCSS-M">CCSS-M</option>
+          <option value="MN-2007">MN 2007</option>
+          <option value="TEKS">TEKS</option>
+          <option value="FL-BEST">FL B.E.S.T.</option>
+          <option value="VA-SOL">VA SOL</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Grade</label>
+        <select id="grade-filter"><option value="">All</option></select>
+      </div>
+      <div class="filter-group">
+        <label>Status</label>
+        <select id="status-filter">
+          <option value="">All</option>
+          <option value="gap">Gaps Only</option>
+          <option value="covered">Covered Only</option>
+          <option value="over">Overcovered Only</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Search</label>
+        <input type="text" id="search-filter" placeholder="Standard code or keyword...">
+      </div>
+    </div>
+    <div class="summary-grid" id="dashSummary"></div>
+    <div id="dashGrid"></div>
+  </div>
+
+  <!-- Tab 2: Gap Analysis -->
+  <div class="panel" id="panel-gaps">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Framework</label>
+        <select id="gap-fw-filter">
+          <option value="MN-2022">MN 2022</option>
+          <option value="CCSS-M">CCSS-M</option>
+          <option value="MN-2007">MN 2007</option>
+          <option value="TEKS">TEKS</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Grade</label>
+        <select id="gap-grade-filter"><option value="">All</option></select>
+      </div>
+    </div>
+    <div id="gapContent"></div>
+  </div>
+
+  <!-- Tab 3: Module Tracker -->
+  <div class="panel" id="panel-tracker">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Course</label>
+        <select id="tracker-course-filter"><option value="">All Courses</option></select>
+      </div>
+      <div class="filter-group" style="margin-left: auto; flex-direction: row; gap: 8px; align-items: end;">
+        <button onclick="exportChecked()" style="padding: 6px 12px; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; font-size: 12px;">Export Checked</button>
+        <button onclick="clearChecked()" style="padding: 6px 12px; border-radius: 4px; border: 1px solid var(--red); color: var(--red); cursor: pointer; font-size: 12px; background: #fff;">Clear All</button>
+      </div>
+    </div>
+    <div id="trackerSummary" class="summary-grid"></div>
+    <div id="trackerTree"></div>
+  </div>
+
+  <!-- Tab 4: Skip Impact -->
+  <div class="panel" id="panel-impact">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Select Module to Skip</label>
+        <select id="impact-module-select" style="min-width: 300px;">
+          <option value="">Choose a module...</option>
+        </select>
+      </div>
+    </div>
+    <div id="impactContent"></div>
+  </div>
+
+  <!-- Tab 5: Framework Comparison -->
+  <div class="panel" id="panel-compare">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Grade</label>
+        <select id="compare-grade-filter"><option value="">All</option></select>
+      </div>
+      <div class="filter-group">
+        <label>Topic Cluster</label>
+        <select id="compare-cluster-filter"><option value="">All</option></select>
+      </div>
+    </div>
+    <div id="compareContent"></div>
+  </div>
+</div>
+
+<script>
+let D = null; // data
+let taught = {}; // module_id -> boolean
+
+// Load data
+async function init() {
+  const resp = await fetch('data.json');
+  D = await resp.json();
+
+  // Load taught state from localStorage
+  try { taught = JSON.parse(localStorage.getItem('rms_taught') || '{}'); } catch(e) { taught = {}; }
+
+  // Build indexes
+  buildIndexes();
+  populateFilters();
+  renderDashboard();
+  renderGaps();
+  renderTracker();
+  populateImpactSelect();
+  renderComparison();
+  updateStatsBar();
+
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById('panel-' + t.dataset.tab).classList.add('active');
+    });
+  });
+
+  // Filter listeners
+  ['fw-filter','grade-filter','status-filter','search-filter'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', renderDashboard);
+    if (el.type === 'text') el.addEventListener('input', renderDashboard);
+  });
+  ['gap-fw-filter','gap-grade-filter'].forEach(id => {
+    document.getElementById(id).addEventListener('change', renderGaps);
+  });
+  document.getElementById('tracker-course-filter').addEventListener('change', renderTracker);
+  document.getElementById('impact-module-select').addEventListener('change', renderImpact);
+  ['compare-grade-filter','compare-cluster-filter'].forEach(id => {
+    document.getElementById(id).addEventListener('change', renderComparison);
+  });
+}
+
+// Indexes
+let stdById = {};
+let modById = {};
+let courseById = {};
+let clusterById = {};
+let stdToMods = {};
+let modToStds = {};
+
+function buildIndexes() {
+  D.standards.forEach(s => stdById[s.id] = s);
+  D.cpm_modules.forEach(m => modById[m.id] = m);
+  D.cpm_courses.forEach(c => courseById[c.id] = c);
+  D.topic_clusters.forEach(c => clusterById[c.id] = c);
+  stdToMods = D.standard_to_modules || {};
+  modToStds = D.module_to_standards || {};
+}
+
+function populateFilters() {
+  const grades = [...new Set(D.standards.map(s => s.grade).filter(Boolean))].sort((a,b) => {
+    const na = a === 'K' ? 0 : (a === 'HS' ? 13 : parseInt(a));
+    const nb = b === 'K' ? 0 : (b === 'HS' ? 13 : parseInt(b));
+    return na - nb;
+  });
+  ['grade-filter','gap-grade-filter','compare-grade-filter'].forEach(id => {
+    const sel = document.getElementById(id);
+    grades.forEach(g => { const o = document.createElement('option'); o.value = g; o.text = 'Grade ' + g; sel.add(o); });
+  });
+
+  const courses = D.cpm_courses;
+  const csel = document.getElementById('tracker-course-filter');
+  courses.forEach(c => { const o = document.createElement('option'); o.value = c.id; o.text = c.name + ' (' + c.id + ')'; csel.add(o); });
+
+  const clusters = D.topic_clusters;
+  const clsel = document.getElementById('compare-cluster-filter');
+  [...new Set(clusters.map(c => c.name))].sort().forEach(n => {
+    const o = document.createElement('option'); o.value = n; o.text = n; clsel.add(o);
+  });
+}
+
+function updateStatsBar() {
+  const totalMods = D.cpm_modules.length;
+  const taughtCount = Object.values(taught).filter(Boolean).length;
+  const fw = 'MN-2022';
+  const fwStds = D.standards.filter(s => s.framework === fw);
+  const coveredStds = new Set();
+  D.cpm_standard_alignments.forEach(a => {
+    const s = stdById[a.standard_id];
+    if (s && s.framework === fw) coveredStds.add(a.standard_id);
+  });
+  const gaps = fwStds.length - coveredStds.size;
+
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat">Modules: <b>${taughtCount}/${totalMods}</b> taught</div>
+    <div class="stat">MN-2022: <b>${coveredStds.size}/${fwStds.length}</b> covered</div>
+    <div class="stat">Gaps: <b>${gaps}</b></div>
+  `;
+}
+
+// ── Tab 1: Coverage Dashboard ──
+function renderDashboard() {
+  const fw = document.getElementById('fw-filter').value;
+  const grade = document.getElementById('grade-filter').value;
+  const status = document.getElementById('status-filter').value;
+  const search = document.getElementById('search-filter').value.toLowerCase();
+
+  let stds = D.standards.filter(s => s.framework === fw);
+  if (grade) stds = stds.filter(s => s.grade === grade);
+  if (search) stds = stds.filter(s =>
+    (s.code && s.code.toLowerCase().includes(search)) ||
+    (s.description && s.description.toLowerCase().includes(search)) ||
+    (s.domain && s.domain.toLowerCase().includes(search))
+  );
+
+  const courses = D.cpm_courses;
+  const coveredSet = new Set();
+  const overSet = new Set();
+
+  // Count how many modules cover each standard
+  const stdCovCount = {};
+  stds.forEach(s => {
+    const mods = stdToMods[s.id] || [];
+    stdCovCount[s.id] = mods.length;
+    if (mods.length > 0) coveredSet.add(s.id);
+    if (mods.length > 2) overSet.add(s.id);
+  });
+
+  if (status === 'gap') stds = stds.filter(s => !coveredSet.has(s.id));
+  else if (status === 'covered') stds = stds.filter(s => coveredSet.has(s.id));
+  else if (status === 'over') stds = stds.filter(s => overSet.has(s.id));
+
+  // Summary cards
+  const total = D.standards.filter(s => s.framework === fw && (!grade || s.grade === grade)).length;
+  const covCount = D.standards.filter(s => s.framework === fw && (!grade || s.grade === grade) && coveredSet.has(s.id)).length;
+  const gapCount = total - covCount;
+  const overCount = D.standards.filter(s => s.framework === fw && (!grade || s.grade === grade) && overSet.has(s.id)).length;
+  const pct = total > 0 ? Math.round(covCount / total * 100) : 0;
+
+  document.getElementById('dashSummary').innerHTML = `
+    <div class="summary-card good"><div class="number">${pct}%</div><div class="label">Coverage</div></div>
+    <div class="summary-card good"><div class="number">${covCount}</div><div class="label">Standards Covered</div></div>
+    <div class="summary-card ${gapCount > 0 ? 'bad' : 'good'}"><div class="number">${gapCount}</div><div class="label">Gaps</div></div>
+    <div class="summary-card ${overCount > 0 ? 'warn' : 'good'}"><div class="number">${overCount}</div><div class="label">Overcovered (3+)</div></div>
+    <div class="summary-card"><div class="number">${stds.length}</div><div class="label">Showing</div></div>
+  `;
+
+  // Table
+  let html = '<table class="data"><thead><tr>';
+  html += '<th>Code</th><th>Grade</th><th>Domain</th><th>Description</th><th>Status</th><th>Covered By</th>';
+  html += '</tr></thead><tbody>';
+
+  stds.slice(0, 200).forEach(s => {
+    const mods = stdToMods[s.id] || [];
+    const count = mods.length;
+    let statusBadge, statusClass;
+    if (count === 0) { statusBadge = 'GAP'; statusClass = 'gap'; }
+    else if (count > 2) { statusBadge = count + 'x'; statusClass = 'over'; }
+    else { statusBadge = 'OK'; statusClass = 'covered'; }
+
+    const modNames = mods.map(m => m.course_id + ' ' + (modById[m.module_id]?.lesson || modById[m.module_id]?.section || '')).join(', ');
+
+    html += `<tr>
+      <td><code>${s.code || ''}</code></td>
+      <td>${s.grade || ''}</td>
+      <td>${s.domain || ''}</td>
+      <td style="max-width:400px;font-size:12px">${(s.description || '').slice(0, 150)}${(s.description || '').length > 150 ? '...' : ''}</td>
+      <td><span class="badge ${statusClass}">${statusBadge}</span></td>
+      <td style="font-size:11px;max-width:200px">${modNames || '<span style="color:var(--red)">None</span>'}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  if (stds.length > 200) html += `<p style="color:var(--gray);margin-top:8px">Showing 200 of ${stds.length} standards. Use filters to narrow.</p>`;
+
+  document.getElementById('dashGrid').innerHTML = html;
+}
+
+// ── Tab 2: Gap Analysis ──
+function renderGaps() {
+  const fw = document.getElementById('gap-fw-filter').value;
+  const grade = document.getElementById('gap-grade-filter').value;
+
+  let stds = D.standards.filter(s => s.framework === fw);
+  if (grade) stds = stds.filter(s => s.grade === grade);
+
+  const gaps = stds.filter(s => !(stdToMods[s.id] && stdToMods[s.id].length > 0));
+
+  // Group by grade then domain
+  const grouped = {};
+  gaps.forEach(s => {
+    const g = s.grade || '?';
+    const d = s.domain || 'Other';
+    if (!grouped[g]) grouped[g] = {};
+    if (!grouped[g][d]) grouped[g][d] = [];
+    grouped[g][d].push(s);
+  });
+
+  // Find DOK/rigor for each gap
+  const clusterStdMap = {};
+  D.cluster_standards.forEach(cs => {
+    if (!clusterStdMap[cs.standard_id]) clusterStdMap[cs.standard_id] = [];
+    clusterStdMap[cs.standard_id].push(cs.cluster_id);
+  });
+
+  let html = '';
+  if (gaps.length === 0) {
+    html = '<div class="card" style="text-align:center;padding:40px"><h3 style="color:var(--green)">No Gaps Found!</h3><p>All standards in this framework have at least one CPM module alignment.</p></div>';
+  } else {
+    html = `<div class="card"><h3>${gaps.length} Uncovered Standards in ${fw}</h3></div>`;
+
+    const sortedGrades = Object.keys(grouped).sort((a,b) => {
+      const na = a === 'K' ? 0 : (a === 'HS' || a === '9\u201311' ? 10 : parseInt(a) || 99);
+      const nb = b === 'K' ? 0 : (b === 'HS' || b === '9\u201311' ? 10 : parseInt(b) || 99);
+      return na - nb;
+    });
+
+    sortedGrades.forEach(g => {
+      html += `<div class="card"><h3>Grade ${g}</h3>`;
+      Object.keys(grouped[g]).sort().forEach(d => {
+        html += `<h4 style="margin:8px 0 4px;color:var(--gray);font-size:13px">${d}</h4>`;
+        html += '<table class="data"><thead><tr><th>Code</th><th>Description</th><th>DOK</th><th>Priority</th></tr></thead><tbody>';
+        grouped[g][d].forEach(s => {
+          const clusters = (clusterStdMap[s.id] || []).map(cid => clusterById[cid]).filter(Boolean);
+          const dok = clusters.map(c => c.dok_ceiling || c.dok_floor).filter(Boolean)[0] || '-';
+          const rigor = clusters.map(c => c.rigor).filter(Boolean)[0] || '-';
+          html += `<tr>
+            <td><code>${s.code}</code></td>
+            <td style="font-size:12px">${(s.description || s.topic || '').slice(0, 200)}</td>
+            <td><span class="badge dok">${dok}</span></td>
+            <td>${rigor}</td>
+          </tr>`;
+        });
+        html += '</tbody></table>';
+      });
+      html += '</div>';
+    });
+  }
+
+  document.getElementById('gapContent').innerHTML = html;
+}
+
+// ── Tab 3: Module Tracker ──
+function renderTracker() {
+  const courseFilter = document.getElementById('tracker-course-filter').value;
+  let courses = D.cpm_courses;
+  if (courseFilter) courses = courses.filter(c => c.id === courseFilter);
+
+  // Group modules by course > chapter > section
+  const tree = {};
+  D.cpm_modules.forEach(m => {
+    if (courseFilter && m.course_id !== courseFilter) return;
+    if (!tree[m.course_id]) tree[m.course_id] = {};
+    const ch = m.chapter || 0;
+    if (!tree[m.course_id][ch]) tree[m.course_id][ch] = {};
+    const sec = m.section || 'other';
+    if (!tree[m.course_id][ch][sec]) tree[m.course_id][ch][sec] = [];
+    tree[m.course_id][ch][sec].push(m);
+  });
+
+  // Summary
+  const totalMods = D.cpm_modules.filter(m => !courseFilter || m.course_id === courseFilter).length;
+  const taughtCount = D.cpm_modules.filter(m => (!courseFilter || m.course_id === courseFilter) && taught[m.id]).length;
+  const pct = totalMods > 0 ? Math.round(taughtCount / totalMods * 100) : 0;
+
+  // Count standards covered by taught modules
+  const taughtStds = new Set();
+  D.cpm_standard_alignments.forEach(a => {
+    if (taught[a.module_id]) taughtStds.add(a.standard_id);
+  });
+
+  document.getElementById('trackerSummary').innerHTML = `
+    <div class="summary-card ${pct > 80 ? 'good' : pct > 50 ? 'warn' : 'bad'}">
+      <div class="number">${pct}%</div><div class="label">Modules Taught</div>
+    </div>
+    <div class="summary-card"><div class="number">${taughtCount}/${totalMods}</div><div class="label">Modules Checked</div></div>
+    <div class="summary-card good"><div class="number">${taughtStds.size}</div><div class="label">Standards Covered (Taught)</div></div>
+  `;
+
+  let html = '<div class="tree">';
+
+  courses.forEach(course => {
+    if (!tree[course.id]) return;
+    const courseModIds = D.cpm_modules.filter(m => m.course_id === course.id).map(m => m.id);
+    const courseTaught = courseModIds.filter(id => taught[id]).length;
+    const coursePct = courseModIds.length > 0 ? Math.round(courseTaught / courseModIds.length * 100) : 0;
+
+    html += `<div class="tree-course">
+      <div class="tree-header" onclick="toggleTree(this)">
+        <span><span class="toggle">&#9654;</span> ${course.name} (${course.id})</span>
+        <span>${courseTaught}/${courseModIds.length}
+          <span class="coverage-meter"><span class="fill" style="width:${coursePct}%"></span></span>
+        </span>
+      </div>
+      <div class="tree-children">`;
+
+    const chapters = Object.keys(tree[course.id]).sort((a,b) => parseInt(a) - parseInt(b));
+    chapters.forEach(ch => {
+      const chMods = [];
+      Object.values(tree[course.id][ch]).forEach(mods => chMods.push(...mods));
+      const chTaught = chMods.filter(m => taught[m.id]).length;
+
+      html += `<div class="tree-chapter">
+        <div class="tree-header" onclick="toggleTree(this)">
+          <span><span class="toggle">&#9654;</span> Chapter ${ch}</span>
+          <span>${chTaught}/${chMods.length}</span>
+        </div>
+        <div class="tree-children">`;
+
+      const sections = Object.keys(tree[course.id][ch]).sort();
+      sections.forEach(sec => {
+        const mods = tree[course.id][ch][sec];
+        mods.forEach(m => {
+          const stds = modToStds[m.id] || [];
+          const label = m.lesson || m.section || `Ch${m.chapter}`;
+          const concepts = m.core_concepts || '';
+          html += `<div class="tree-module">
+            <input type="checkbox" ${taught[m.id] ? 'checked' : ''} onchange="toggleTaught(${m.id}, this.checked)">
+            <span class="lesson-id">${label}</span>
+            <span class="concepts">${concepts.slice(0, 60)}</span>
+            <span class="std-count">${stds.length} std${stds.length !== 1 ? 's' : ''}</span>
+          </div>`;
+        });
+      });
+
+      html += '</div></div>';
+    });
+
+    html += '</div></div>';
+  });
+
+  html += '</div>';
+  document.getElementById('trackerTree').innerHTML = html;
+}
+
+function toggleTree(el) {
+  const children = el.nextElementSibling;
+  if (children) {
+    children.classList.toggle('open');
+    const toggle = el.querySelector('.toggle');
+    if (toggle) toggle.textContent = children.classList.contains('open') ? '\u25BC' : '\u25B6';
+  }
+}
+
+function toggleTaught(modId, checked) {
+  taught[modId] = checked;
+  localStorage.setItem('rms_taught', JSON.stringify(taught));
+  updateStatsBar();
+  // Lightweight update of summary only
+  renderTracker();
+}
+
+function exportChecked() {
+  const data = { exported: new Date().toISOString(), taught: {} };
+  Object.entries(taught).forEach(([id, v]) => {
+    if (v) {
+      const m = modById[id];
+      if (m) data.taught[id] = { course: m.course_id, lesson: m.lesson || m.section, concepts: m.core_concepts };
+    }
+  });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'taught_modules_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+}
+
+function clearChecked() {
+  if (confirm('Clear all checked modules?')) {
+    taught = {};
+    localStorage.removeItem('rms_taught');
+    renderTracker();
+    updateStatsBar();
+  }
+}
+
+// ── Tab 4: Skip Impact ──
+function populateImpactSelect() {
+  const sel = document.getElementById('impact-module-select');
+  D.cpm_courses.forEach(course => {
+    const mods = D.cpm_modules.filter(m => m.course_id === course.id);
+    const group = document.createElement('optgroup');
+    group.label = course.name;
+    mods.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.id;
+      const stds = modToStds[m.id] || [];
+      o.text = `${m.lesson || m.section || 'Ch' + m.chapter} - ${(m.core_concepts || '').slice(0, 50)} (${stds.length} standards)`;
+      group.appendChild(o);
+    });
+    sel.appendChild(group);
+  });
+}
+
+function renderImpact() {
+  const modId = parseInt(document.getElementById('impact-module-select').value);
+  if (!modId) {
+    document.getElementById('impactContent').innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--gray)">Select a module above to see the impact of skipping it.</div>';
+    return;
+  }
+
+  const mod = modById[modId];
+  const stds = modToStds[modId] || [];
+
+  // Find standards ONLY covered by this module (would become gaps)
+  const uniqueStds = stds.filter(s => {
+    const allMods = stdToMods[s.standard_id] || [];
+    return allMods.length === 1;
+  });
+
+  // Find standards also covered by other modules
+  const sharedStds = stds.filter(s => {
+    const allMods = stdToMods[s.standard_id] || [];
+    return allMods.length > 1;
+  });
+
+  // Find related clusters and their prerequisites
+  const clusterStdMap = {};
+  D.cluster_standards.forEach(cs => {
+    if (!clusterStdMap[cs.standard_id]) clusterStdMap[cs.standard_id] = [];
+    clusterStdMap[cs.standard_id].push(cs.cluster_id);
+  });
+
+  const affectedClusters = new Set();
+  stds.forEach(s => {
+    (clusterStdMap[s.standard_id] || []).forEach(cid => affectedClusters.add(cid));
+  });
+
+  // Find downstream dependencies
+  const downstream = D.cluster_links.filter(l =>
+    affectedClusters.has(l.cluster_id) && l.link_type === 'successor'
+  ).map(l => clusterById[l.linked_cluster_id]).filter(Boolean);
+
+  const laterals = D.cluster_links.filter(l =>
+    affectedClusters.has(l.cluster_id) && l.link_type === 'lateral'
+  ).map(l => clusterById[l.linked_cluster_id]).filter(Boolean);
+
+  let html = `<div class="card">
+    <h3>Impact of Skipping: ${mod.course_id} ${mod.lesson || mod.section || 'Ch' + mod.chapter}</h3>
+    <p style="color:var(--gray);margin:4px 0">${mod.core_concepts || ''}</p>
+    <p>This module covers <b>${stds.length}</b> standard${stds.length !== 1 ? 's' : ''}.</p>
+  </div>`;
+
+  if (uniqueStds.length > 0) {
+    html += `<div class="card impact-section">
+      <h4>Standards That Would Become GAPS (${uniqueStds.length})</h4>
+      <p style="font-size:12px;color:var(--gray);margin-bottom:8px">These standards are ONLY covered by this module. Skipping creates a gap.</p>
+      <ul class="impact-list">`;
+    uniqueStds.forEach(s => {
+      const std = stdById[s.standard_id];
+      html += `<li><code>${std?.code || ''}</code> (${s.framework}) ${(std?.description || '').slice(0, 100)}</li>`;
+    });
+    html += '</ul></div>';
+  } else {
+    html += '<div class="card" style="border-left:3px solid var(--green)"><b>Good news:</b> All standards in this module are also covered elsewhere. No new gaps created.</div>';
+  }
+
+  if (sharedStds.length > 0) {
+    html += `<div class="card">
+      <h4 style="color:var(--green)">Standards Still Covered Elsewhere (${sharedStds.length})</h4>
+      <table class="data"><thead><tr><th>Code</th><th>Framework</th><th>Also Covered By</th></tr></thead><tbody>`;
+    sharedStds.slice(0, 20).forEach(s => {
+      const allMods = (stdToMods[s.standard_id] || []).filter(m => m.module_id !== modId);
+      const names = allMods.map(m => m.course_id + ' ' + (modById[m.module_id]?.lesson || modById[m.module_id]?.section || '')).join(', ');
+      html += `<tr><td><code>${s.code}</code></td><td>${s.framework}</td><td style="font-size:11px">${names}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (downstream.length > 0) {
+    html += `<div class="card impact-section">
+      <h4 style="color:var(--orange)">Downstream Dependencies (${downstream.length})</h4>
+      <p style="font-size:12px;color:var(--gray);margin-bottom:8px">These topic clusters build on concepts in this module.</p>
+      <ul class="impact-list prereq">`;
+    downstream.forEach(c => {
+      html += `<li>Grade ${c.grade}: <b>${c.name}</b> (DOK ${c.dok_ceiling || c.dok_floor || '?'})</li>`;
+    });
+    html += '</ul></div>';
+  }
+
+  if (laterals.length > 0) {
+    html += `<div class="card impact-section">
+      <h4 style="color:var(--primary)">Lateral Connections (${laterals.length})</h4>
+      <p style="font-size:12px;color:var(--gray);margin-bottom:8px">Related topic clusters that may provide partial alternative coverage.</p>
+      <ul class="impact-list lateral">`;
+    laterals.forEach(c => {
+      html += `<li>Grade ${c.grade}: <b>${c.name}</b></li>`;
+    });
+    html += '</ul></div>';
+  }
+
+  document.getElementById('impactContent').innerHTML = html;
+}
+
+// ── Tab 5: Framework Comparison ──
+function renderComparison() {
+  const grade = document.getElementById('compare-grade-filter').value;
+  const clusterName = document.getElementById('compare-cluster-filter').value;
+
+  let clusters = D.topic_clusters;
+  if (grade) clusters = clusters.filter(c => c.grade === grade);
+  if (clusterName) clusters = clusters.filter(c => c.name === clusterName);
+
+  // Build cluster → standards per framework
+  const clusterStds = {};
+  D.cluster_standards.forEach(cs => {
+    if (!clusterStds[cs.cluster_id]) clusterStds[cs.cluster_id] = [];
+    clusterStds[cs.cluster_id].push(cs.standard_id);
+  });
+
+  const frameworks = ['CCSS-M', 'MN-2007', 'MN-2022', 'TEKS', 'FL-BEST', 'VA-SOL'];
+
+  let html = '<div class="comparison-grid" style="grid-template-columns: 60px 140px repeat(6, 1fr);">';
+  html += '<div class="cell header">Grade</div><div class="cell header">Topic</div>';
+  frameworks.forEach(fw => html += `<div class="cell header">${fw}</div>`);
+
+  clusters.slice(0, 100).forEach(c => {
+    const stdIds = clusterStds[c.id] || [];
+    html += `<div class="cell">${c.grade || ''}</div>`;
+    html += `<div class="cell" style="font-weight:500">${c.name}</div>`;
+
+    frameworks.forEach(fw => {
+      const fwStds = stdIds.map(id => stdById[id]).filter(s => s && s.framework === fw);
+      if (fwStds.length > 0) {
+        const codes = fwStds.map(s => s.code).join(', ');
+        html += `<div class="cell present" title="${codes}">${fwStds.length} std${fwStds.length > 1 ? 's' : ''}<br><small>${codes.slice(0, 40)}</small></div>`;
+      } else {
+        html += '<div class="cell missing">--</div>';
+      }
+    });
+  });
+
+  html += '</div>';
+  if (clusters.length > 100) html += `<p style="color:var(--gray);margin-top:8px">Showing 100 of ${clusters.length}. Use filters to narrow.</p>`;
+
+  document.getElementById('compareContent').innerHTML = html;
+}
+
+// Init
+init();
+</script>
+</body>
+</html>
