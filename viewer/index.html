@@ -385,23 +385,22 @@ function render(){
   else renderByBook();
 }
 
-/* Build a heatmap HTML for given standards + course + chapters */
+/* Build a heatmap HTML for given standards + course, broken out by lesson */
 function buildHeatmap(stds, courseId, title){
   const mods=D.cpm_modules.filter(m=>m.course_id===courseId);
   const chapters={};
   mods.forEach(m=>{const ch=m.chapter||'?';if(!chapters[ch])chapters[ch]=[];chapters[ch].push(m);});
   const chNums=Object.keys(chapters).sort((a,b)=>Number(a)-Number(b));
+  const fw=stds[0]?.framework;
 
-  // Count: standard × chapter → lessons
-  const counts={};
-  let globalMax=0;
-  mods.forEach(m=>{
-    const fw=stds[0]?.framework;
-    const aligned=L(m2s,m.id).filter(s=>stdI[s.standard_id]&&stdI[s.standard_id].framework===fw);
-    aligned.forEach(s=>{
-      const key=s.standard_id+'|'+m.chapter;
-      counts[key]=(counts[key]||0)+1;
-      if(counts[key]>globalMax) globalMax=counts[key];
+  // Build ordered list of all lessons and a set of aligned standard IDs per lesson
+  const lessonList=[];  // [{mod, chapter}]
+  const lessonAligned={};  // mod.id → Set of standard_ids
+  chNums.forEach(ch=>{
+    chapters[ch].forEach(m=>{
+      lessonList.push(m);
+      const aligned=L(m2s,m.id).filter(s=>stdI[s.standard_id]&&stdI[s.standard_id].framework===fw);
+      lessonAligned[m.id]=new Set(aligned.map(s=>s.standard_id));
     });
   });
 
@@ -409,29 +408,43 @@ function buildHeatmap(stds, courseId, title){
   const domains={};
   stds.forEach(s=>{const d=s.domain||'Other';if(!domains[d])domains[d]=[];domains[d].push(s);});
 
+  const totalCols=lessonList.length;
+
   let h=`<div class="card">
     <h2>${title}</h2>
-    <p style="color:#6b7280;font-size:12px;margin-bottom:6px">Rows = standards, columns = chapters. Click any cell to see the reasoning. Color: <b style="color:#ef4444">red</b> = gap, <b style="color:#eab308">yellow</b> = few, <b style="color:#22c55e">green</b> = many alignments.</p>
-    ${hmLegendHTML(globalMax)}
-    <div class="heatmap-wrap"><table class="heatmap">
-    <thead><tr><th class="corner">Standard</th>`;
-  chNums.forEach(ch=>{ h+=`<th class="ch-hdr">Ch${ch}</th>`; });
-  h+=`<th style="padding:4px 8px;font-size:10px;min-width:40px;background:#f3f4f6">Total</th></tr></thead><tbody>`;
+    <p style="color:#6b7280;font-size:12px;margin-bottom:6px">Rows = standards, columns = lessons. Click any cell to see the reasoning. <b style="color:#22c55e">Green</b> = aligned, <b style="color:#ef4444">Red</b> = not aligned.</p>
+    <div class="heatmap-wrap"><table class="heatmap">`;
+
+  // Two header rows: chapter grouping + lesson numbers
+  h+=`<thead><tr><th class="corner" rowspan="2">Standard</th>`;
+  chNums.forEach(ch=>{
+    const n=chapters[ch].length;
+    h+=`<th class="ch-hdr" colspan="${n}">Ch ${ch}</th>`;
+  });
+  h+=`<th rowspan="2" style="padding:4px 6px;font-size:10px;min-width:36px;background:#f3f4f6">Total</th></tr>`;
+
+  h+=`<tr>`;
+  lessonList.forEach(m=>{
+    const lbl=(m.lesson||m.section||'').replace(/^[\d]+\./,'');
+    h+=`<th style="padding:2px 3px;font-size:9px;white-space:nowrap;background:#f3f4f6;min-width:22px" title="${m.lesson||m.section||''}">${lbl}</th>`;
+  });
+  h+=`</tr></thead><tbody>`;
 
   Object.keys(domains).forEach(domain=>{
-    h+=`<tr class="hm-domain-row"><td colspan="${chNums.length+2}">${domain}</td></tr>`;
+    h+=`<tr class="hm-domain-row"><td colspan="${totalCols+2}">${domain}</td></tr>`;
     domains[domain].forEach(s=>{
       let rowTotal=0;
       h+=`<tr><th class="row-hdr" title="${(s.description||'').slice(0,120)}">${s.code}</th>`;
-      chNums.forEach(ch=>{
-        const n=counts[s.id+'|'+ch]||0;
-        rowTotal+=n;
-        const bg=hmColor(n, globalMax);
-        const fg=n===0?'#991b1b':(n>=globalMax*0.5?'#fff':'#1a1a2e');
-        h+=`<td class="hm-cell" style="background:${bg};color:${fg}" title="${s.code} × Ch${ch}: ${n} lesson${n!==1?'s':''}" onclick="showCellDetail(${s.id},'${courseId}','${ch}')">${n||''}</td>`;
+      lessonList.forEach(m=>{
+        const hit=lessonAligned[m.id]&&lessonAligned[m.id].has(s.id)?1:0;
+        rowTotal+=hit;
+        const bg=hit?'#22c55e':'#ef4444';
+        const fg=hit?'#fff':'#991b1b';
+        h+=`<td class="hm-cell" style="background:${bg};color:${fg};width:22px;min-width:22px" title="${s.code} × ${m.lesson||m.section||''}: ${hit?'aligned':'gap'}" onclick="showCellDetail(${s.id},'${courseId}','${m.chapter}')">${hit?'&check;':''}</td>`;
       });
-      const totBg=hmColor(rowTotal, globalMax*chNums.length*0.15);
-      h+=`<td class="hm-cell" style="background:${totBg};font-weight:700" title="Total: ${rowTotal}" onclick="showCellDetail(${s.id},'${courseId}','*')">${rowTotal}</td></tr>`;
+      const pct=lessonList.length?Math.round(rowTotal/lessonList.length*100):0;
+      const totBg=pct>=50?'#22c55e':pct>=20?'#eab308':'#ef4444';
+      h+=`<td class="hm-cell" style="background:${totBg};font-weight:700;color:${pct>=50?'#fff':'#1a1a2e'}" title="${rowTotal}/${lessonList.length} lessons (${pct}%)" onclick="showCellDetail(${s.id},'${courseId}','*')">${rowTotal}</td></tr>`;
     });
   });
 
