@@ -1436,7 +1436,317 @@ def bridge_mn2007(conn, standards_map):
                 content_count += 1
 
     if content_count:
-        print(f"  Content-based bridge: {content_count} additional MN-2007 alignments for {len(unaligned)} unaligned modules")
+        print(f"  Content-based bridge: {content_count} additional MN-2007 alignments for unaligned modules")
+
+    # ── CCSS → MN-2022 bridge ──
+    # Many lessons have CCSS codes but no MN-2022. Use the xref to bridge.
+    ccss_to_mn22 = {}
+    for _, row in xref.iterrows():
+        grade = str(row.get('Grade', '')).strip()
+        ccss_codes = split_codes(row.get('CCSS-M Codes'))
+        mn22_strand_codes = split_codes(row.get('MN 2022 Codes'))
+        if not ccss_codes or not mn22_strand_codes:
+            continue
+        for ccss in ccss_codes:
+            for variant in {ccss, strip_ccss_cluster(ccss), ccss.lower()}:
+                if variant not in ccss_to_mn22:
+                    ccss_to_mn22[variant] = set()
+                ccss_to_mn22[variant].update(mn22_strand_codes)
+
+    # Also build strand-letter → numeric MN-2022 mapping using description keywords
+    mn22_strand_to_numeric = {}
+    mn22_stds_all = conn.execute(
+        "SELECT code, grade, domain, description FROM standards WHERE framework='MN-2022'"
+    ).fetchall()
+    for (code, grade, domain, desc) in mn22_stds_all:
+        desc_lower = (desc or '').lower()
+        # Build lookup: for each strand-letter code, find matching numeric codes
+        # We match by grade + domain keywords
+        pass  # Will use direct xref domain mapping below
+
+    # For the CCSS→MN-2022 bridge, resolve strand-letter codes to numeric codes
+    # using the domain-based mapping we built earlier (mn22_domain_to_mn07 has the cluster info)
+    # Simpler: for each strand-letter code, find all numeric codes in same grade+strand
+    strand_letter_to_numeric = {}
+    strand_map_rev = {'DP': '1', 'GM': '2', 'N': '3', 'A': '3', 'PR': '3'}
+    for (code, grade, domain, desc) in mn22_stds_all:
+        # code is numeric like 6.3.5.7
+        parts = code.split('.')
+        if len(parts) < 3:
+            continue
+        strand_num = parts[1]
+        # Find which strand letters map to this number
+        for letter, num in strand_map_rev.items():
+            if num == strand_num:
+                # Try all possible strand-letter patterns
+                # e.g., for 6.3.5.7 with strand N (→3): match 6.N.*.* patterns
+                for sl_code in ccss_to_mn22.get('_dummy_', set()):
+                    pass  # We need a different approach
+
+    # Build MN-2022 numeric code lookups
+    mn22_by_grade_domain = {}
+    for (code, grade, domain, desc) in mn22_stds_all:
+        key = (grade, domain)
+        if key not in mn22_by_grade_domain:
+            mn22_by_grade_domain[key] = []
+        mn22_by_grade_domain[key].append(code)
+
+    # Map xref cluster names to MN-2022 domains
+    xref_cluster_to_mn22_domain = {
+        # Grade 6
+        'Area & Geometry': 'Spatial Reasoning', 'Coordinate Plane': 'Spatial Reasoning',
+        'Expressions & Equations': 'Patterns and Relationships',
+        'Fractions, Decimals & Percents': 'Patterns and Relationships',
+        'Integers & Rational Numbers': 'Patterns and Relationships',
+        'Percents': 'Patterns and Relationships', 'Ratios & Rates': 'Patterns and Relationships',
+        'Statistics & Data': 'Data and Probability',
+        # Grade 7
+        'Area, Surface Area & Volume': 'Spatial Reasoning',
+        'Circles & Circumference': 'Spatial Reasoning',
+        'Scale Drawings & Similar Figures': 'Spatial Reasoning',
+        'Equations & Inequalities': 'Patterns and Relationships',
+        'Operations with Rational Numbers': 'Patterns and Relationships',
+        'Percent Problems': 'Patterns and Relationships',
+        'Proportional Relationships': 'Patterns and Relationships',
+        'Probability': 'Data and Probability',
+        'Statistics & Sampling': 'Data and Probability',
+        # Grade 8
+        'Transformations & Congruence': 'Spatial Reasoning',
+        'Pythagorean Theorem': 'Spatial Reasoning',
+        'Volume — Cylinders, Cones & Spheres': 'Spatial Reasoning',
+        'Real Numbers & Irrational Numbers': 'Patterns and Relationships',
+        'Scientific Notation': 'Patterns and Relationships',
+        'Linear Equations & Slope': 'Patterns and Relationships',
+        'Slope & Rate of Change': 'Patterns and Relationships',
+        'Functions': 'Patterns and Relationships',
+        'Systems of Equations': 'Patterns and Relationships',
+        'Scatter Plots & Bivariate Data': 'Data and Probability',
+    }
+
+    # Build CCSS → MN-2022 numeric code mapping via xref clusters
+    # Use description-based narrowing for "Patterns and Relationships" domain
+    # to avoid mapping everything to all 18+ codes
+    def mn22_codes_for_cluster(grade, cluster):
+        """Get specific MN-2022 numeric codes for a given xref cluster."""
+        domain = xref_cluster_to_mn22_domain.get(cluster)
+        if not domain:
+            return []
+        all_codes = mn22_by_grade_domain.get((grade, domain), [])
+        # For non-ambiguous domains (Spatial Reasoning, Data & Probability), return all
+        if domain != 'Patterns and Relationships':
+            return all_codes
+        # For Patterns and Relationships, narrow by keyword matching on MN-2022 descriptions
+        cluster_lower = cluster.lower()
+        matched = []
+        for code in all_codes:
+            std = conn.execute("SELECT description FROM standards WHERE framework='MN-2022' AND code=?", (code,)).fetchone()
+            desc = (std[0] or '').lower() if std else ''
+            if 'fraction' in cluster_lower or 'decimal' in cluster_lower or 'percent' in cluster_lower:
+                if any(w in desc for w in ['fraction', 'decimal', 'percent', 'multiply', 'divide', 'factor', 'gcf', 'lcm', 'prime', 'estimat', 'equivalen']):
+                    matched.append(code)
+            elif 'integer' in cluster_lower or 'rational' in cluster_lower:
+                if any(w in desc for w in ['positive', 'negative', 'absolute', 'number line', 'rational', 'integer', 'inequalit', 'order']):
+                    matched.append(code)
+            elif 'ratio' in cluster_lower or 'rate' in cluster_lower:
+                if any(w in desc for w in ['ratio', 'rate', 'percent', 'proportion', 'unit rate']):
+                    matched.append(code)
+            elif 'expression' in cluster_lower or 'equation' in cluster_lower:
+                if any(w in desc for w in ['expression', 'equation', 'variable', 'inequalit', 'evaluat', 'equivalent', 'solve']):
+                    matched.append(code)
+            elif 'function' in cluster_lower:
+                if any(w in desc for w in ['function', 'input', 'output', 'linear', 'nonlinear', 'rate of change']):
+                    matched.append(code)
+            elif 'slope' in cluster_lower or 'linear' in cluster_lower:
+                if any(w in desc for w in ['slope', 'intercept', 'linear', 'rate of change', 'graph', 'proportion']):
+                    matched.append(code)
+            elif 'system' in cluster_lower:
+                if any(w in desc for w in ['system', 'simultaneous', 'two equation']):
+                    matched.append(code)
+            elif 'scientific' in cluster_lower:
+                if any(w in desc for w in ['scientific', 'exponent', 'notation']):
+                    matched.append(code)
+            elif 'real number' in cluster_lower or 'irrational' in cluster_lower:
+                if any(w in desc for w in ['irrational', 'real number', 'square root', 'cube root', 'rational']):
+                    matched.append(code)
+            elif 'proportion' in cluster_lower:
+                if any(w in desc for w in ['proportion', 'ratio', 'rate', 'constant', 'unit rate', 'scale']):
+                    matched.append(code)
+            elif 'operation' in cluster_lower:
+                if any(w in desc for w in ['add', 'subtract', 'multiply', 'divide', 'rational', 'fraction', 'decimal', 'negative', 'integer']):
+                    matched.append(code)
+        return matched if matched else all_codes  # fallback to all if no desc match
+
+    ccss_to_mn22_numeric = {}
+    for _, row in xref.iterrows():
+        grade = str(row.get('Grade', '')).strip()
+        if grade not in ('6', '7', '8'):
+            continue
+        cluster = str(row.get('Topic Cluster', '')).strip()
+        ccss_codes = split_codes(row.get('CCSS-M Codes'))
+        if not ccss_codes:
+            continue
+        mn22_numerics = mn22_codes_for_cluster(grade, cluster)
+        for ccss in ccss_codes:
+            for variant in {ccss, strip_ccss_cluster(ccss), ccss.lower()}:
+                if variant not in ccss_to_mn22_numeric:
+                    ccss_to_mn22_numeric[variant] = set()
+                ccss_to_mn22_numeric[variant].update(mn22_numerics)
+
+    # Now bridge: for each module with CCSS but no MN-2022, add MN-2022 alignments
+    mn22_bridge_count = 0
+    for (mod_id, ccss_code) in ccss_alignments:
+        # Check if module already has MN-2022
+        has_mn22 = conn.execute("""
+            SELECT 1 FROM cpm_standard_alignments a
+            JOIN standards s ON s.id=a.standard_id
+            WHERE a.module_id=? AND s.framework='MN-2022' LIMIT 1
+        """, (mod_id,)).fetchone()
+        if has_mn22:
+            continue
+
+        mn22_codes = ccss_to_mn22_numeric.get(ccss_code, set())
+        if not mn22_codes:
+            mn22_codes = ccss_to_mn22_numeric.get(strip_ccss_cluster(ccss_code), set())
+        if not mn22_codes:
+            extracted = extract_ccss_from_text(ccss_code)
+            if extracted:
+                mn22_codes = ccss_to_mn22_numeric.get(extracted, set()) or ccss_to_mn22_numeric.get(strip_ccss_cluster(extracted), set())
+        if not mn22_codes:
+            prefix = '.'.join(ccss_code.split('.')[:3])
+            for k, v in ccss_to_mn22_numeric.items():
+                if k.startswith(prefix) or strip_ccss_cluster(k).startswith(prefix):
+                    mn22_codes.update(v)
+                    break
+        for mn22_code in mn22_codes:
+            mn22_std = conn.execute(
+                "SELECT id FROM standards WHERE framework='MN-2022' AND code=?",
+                (mn22_code,)
+            ).fetchone()
+            if mn22_std:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                    (mod_id, mn22_std[0], 'bridged_via_ccss')
+                )
+                mn22_bridge_count += 1
+
+    print(f"  CCSS→MN-2022 bridge: {mn22_bridge_count} new alignments")
+
+    # Content-based MN-2022 bridge for remaining unaligned modules
+    # Uses description matching to find specific MN-2022 codes (not whole domains)
+    keyword_to_mn22_desc = {
+        '6': [
+            (['fraction', 'mixed number', 'multipl', 'divid', 'division', 'quotient', 'decimal', 'GCF', 'LCM',
+              'number sense', 'factor', 'prime'],
+             ['fraction', 'decimal', 'multiply', 'divide', 'factor', 'gcf', 'lcm', 'prime', 'estimat', 'equivalen']),
+            (['percent', 'discount', 'sale price', 'tax', 'tip'],
+             ['percent']),
+            (['ratio', 'rate', 'unit rate', 'proportion', 'compare', 'scale', 'enlarg'],
+             ['ratio', 'rate', 'proportion', 'unit rate']),
+            (['integer', 'negative', 'positive', 'absolute', 'number line'],
+             ['positive', 'negative', 'absolute', 'number line', 'integer', 'inequalit']),
+            (['expression', 'equation', 'variable', 'algebra', 'evaluate', 'like terms', 'simplif',
+              'distributive', 'combining'],
+             ['expression', 'equation', 'variable', 'inequalit', 'evaluat', 'equivalent', 'solve']),
+            (['area', 'parallelogram', 'triangle', 'trapezoid', 'rectangle', 'polygon', 'decompose',
+              'surface', 'volume', 'perimeter'],
+             None),  # None = use Spatial Reasoning domain directly
+            (['angle', 'coordinate', 'plot'],
+             None),
+            (['statistic', 'median', 'MAD', 'spread', 'dot plot', 'histogram', 'box plot',
+              'data', 'analyz'],
+             None),
+            (['probability', 'chance', 'event', 'outcome', 'sample space'],
+             None),
+        ],
+        '7': [
+            (['fraction', 'mixed number', 'multipl', 'divid', 'rational', 'decimal', 'integer', 'negative'],
+             ['add', 'subtract', 'multiply', 'divide', 'rational', 'fraction', 'decimal', 'negative', 'integer']),
+            (['percent', 'markup', 'discount', 'sale', 'tax', 'tip', 'interest'],
+             ['percent', 'markup', 'discount', 'tax', 'tip', 'interest']),
+            (['ratio', 'rate', 'unit rate', 'proportion', 'compare', 'scale', 'constant'],
+             ['proportion', 'ratio', 'rate', 'constant', 'scale']),
+            (['expression', 'equation', 'inequalit', 'variable', 'algebra', 'like terms', 'simplif'],
+             ['expression', 'equation', 'variable', 'inequalit', 'solve']),
+            (['area', 'surface', 'volume', 'circle', 'circumference', 'similar', 'scale drawing',
+              'angle', 'triangle', 'polygon', 'cross section'], None),
+            (['probability', 'chance', 'event', 'outcome', 'sample', 'compound', 'tree diagram'], None),
+            (['statistic', 'sample', 'population', 'inference', 'random', 'survey', 'median'], None),
+        ],
+        '8': [
+            (['irrational', 'real number', 'square root', 'cube root', 'exponent', 'scientific notation'],
+             ['irrational', 'real number', 'square root', 'cube root', 'exponent', 'scientific', 'notation']),
+            (['slope', 'intercept', 'linear', 'rate of change', 'graph', 'function', 'equation', 'system',
+              'variable', 'proportion', 'pattern'],
+             ['slope', 'intercept', 'linear', 'function', 'equation', 'system', 'rate of change']),
+            (['transform', 'congruent', 'similar', 'reflect', 'rotate', 'translate', 'dilat',
+              'pythagorean', 'right triangle', 'distance', 'volume', 'cylinder', 'cone', 'sphere',
+              'angle', 'coordinate'], None),
+            (['scatter', 'bivariate', 'correlation', 'data', 'statistic', 'trend', 'line of best'], None),
+        ],
+    }
+
+    # Determine domain for non-P&R matches
+    content_domain_map = {
+        '6': {'area': 'Spatial Reasoning', 'angle': 'Spatial Reasoning', 'coordinate': 'Spatial Reasoning',
+              'statistic': 'Data and Probability', 'probability': 'Data and Probability'},
+        '7': {'area': 'Spatial Reasoning', 'probability': 'Data and Probability', 'statistic': 'Data and Probability'},
+        '8': {'transform': 'Spatial Reasoning', 'scatter': 'Data and Probability'},
+    }
+
+    mn22_content_count = 0
+    unaligned_mn22 = conn.execute("""
+        SELECT m.id, m.course_id, m.chapter, m.lesson, m.core_concepts
+        FROM cpm_modules m
+        WHERE m.course_id IN ('CC1','CC2','CC3')
+        AND m.id NOT IN (
+            SELECT a.module_id FROM cpm_standard_alignments a
+            JOIN standards s ON s.id=a.standard_id WHERE s.framework='MN-2022'
+        )
+    """).fetchall()
+
+    for (mod_id, course_id, chapter, lesson, concepts) in unaligned_mn22:
+        grade = course_grade.get(course_id)
+        if not grade:
+            continue
+        text = ((lesson or '') + ' ' + (concepts or '')).lower()
+        if not text.strip() or text.strip() == 'none':
+            continue
+        rules = keyword_to_mn22_desc.get(grade, [])
+        matched_codes = set()
+        for lesson_kws, desc_kws in rules:
+            if not any(re.search(r'\b' + re.escape(kw.lower()), text) for kw in lesson_kws):
+                continue
+            if desc_kws is None:
+                # Non-P&R: find the right domain from the first matching keyword
+                for kw in lesson_kws:
+                    if re.search(r'\b' + re.escape(kw.lower()), text):
+                        dm = content_domain_map.get(grade, {})
+                        for dk, dv in dm.items():
+                            if dk in kw:
+                                matched_codes.update(mn22_by_grade_domain.get((grade, dv), []))
+                                break
+                        break
+            else:
+                # P&R: match specific codes by description
+                for code in mn22_by_grade_domain.get((grade, 'Patterns and Relationships'), []):
+                    std = conn.execute("SELECT description FROM standards WHERE framework='MN-2022' AND code=?", (code,)).fetchone()
+                    d = (std[0] or '').lower() if std else ''
+                    if any(w in d for w in desc_kws):
+                        matched_codes.add(code)
+        for mn22_code in matched_codes:
+            mn22_std = conn.execute(
+                "SELECT id FROM standards WHERE framework='MN-2022' AND code=?",
+                (mn22_code,)
+            ).fetchone()
+            if mn22_std:
+                conn.execute(
+                    "INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
+                    (mod_id, mn22_std[0], 'bridged_via_content')
+                )
+                mn22_content_count += 1
+
+    if mn22_content_count:
+        print(f"  Content→MN-2022 bridge: {mn22_content_count} additional alignments")
 
     conn.commit()
     print(f"  Bridged {new_count} MN-2007 alignments (via CCSS + MN-2022 clusters)")
