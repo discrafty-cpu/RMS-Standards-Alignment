@@ -55,12 +55,31 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 .heatmap th{background:#f3f4f6;padding:4px 6px;font-weight:700;font-size:10px;white-space:nowrap}
 .heatmap th.row-hdr{text-align:left;padding:4px 8px;font-size:11px;min-width:90px;max-width:120px;white-space:normal;position:sticky;left:0;background:#f3f4f6;z-index:3}
 .heatmap th.corner{position:sticky;left:0;z-index:4;background:#f3f4f6}
-.heatmap td.hm-cell{width:28px;min-width:28px;height:26px;cursor:default;position:relative;font-size:10px;font-weight:600}
+.heatmap td.hm-cell{width:28px;min-width:28px;height:26px;cursor:pointer;position:relative;font-size:10px;font-weight:600}
 .hm-cell:hover{outline:2px solid #1e3a8a;outline-offset:-2px;z-index:2}
 .heatmap .ch-hdr{background:#1e3a8a;color:#fff;font-weight:700;text-align:center;padding:4px 6px;font-size:10px}
 .hm-legend{display:inline-flex;gap:3px;align-items:center;font-size:11px;color:#6b7280;margin:6px 0}
 .hm-legend-box{width:18px;height:14px;border:1px solid #ccc;border-radius:2px;display:inline-block}
 .hm-domain-row td{background:#e0e7ff !important;font-weight:700;font-size:11px;padding:4px 8px !important;text-align:left;color:#1e3a8a}
+
+/* Detail panel */
+.hm-detail-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.35);z-index:100;display:flex;align-items:center;justify-content:center}
+.hm-detail{background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25);max-width:600px;width:90%;max-height:80vh;overflow-y:auto;padding:0}
+.hm-detail-hdr{background:#1e3a8a;color:#fff;padding:14px 20px;border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center}
+.hm-detail-hdr h3{font-size:15px;font-weight:700}
+.hm-detail-close{background:none;border:none;color:#fff;font-size:22px;cursor:pointer;padding:0 4px;opacity:.8}
+.hm-detail-close:hover{opacity:1}
+.hm-detail-body{padding:16px 20px}
+.hm-detail-body .std-desc{font-size:13px;color:#374151;margin-bottom:14px;padding:10px 12px;background:#f0f4ff;border-radius:6px;border-left:4px solid #1e3a8a}
+.hm-detail-body .lesson-row{display:flex;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:13px;align-items:flex-start}
+.hm-detail-body .lesson-row:last-child{border-bottom:none}
+.hm-detail-body .lesson-id{font-weight:700;color:#1e3a8a;white-space:nowrap;min-width:60px}
+.hm-detail-body .lesson-concepts{color:#6b7280;flex:1}
+.hm-detail-body .src-tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;white-space:nowrap}
+.src-direct{background:#dcfce7;color:#15803d}
+.src-bridge{background:#fef3c7;color:#92400e}
+.src-content{background:#e0e7ff;color:#3730a3}
+.hm-detail-body .gap-msg{color:#b91c1c;font-weight:600;font-size:14px;padding:12px 0}
 
 .footer{text-align:center;padding:20px;color:#6b7280;font-size:12px}
 
@@ -151,6 +170,89 @@ code{font-family:'SF Mono',Consolas,monospace;font-size:12px;font-weight:600}
 <script>
 let D, stdI={}, modI={}, s2m={}, m2s={};
 function L(map,id){return map[String(id)]||[]}
+
+const SOURCE_LABELS={
+  mn_correlation:['CPM MN Correlation','src-direct','CPM\'s official MN 2022 correlation document lists this lesson for this standard.'],
+  mn_correlation_supplement:['CPM MN Supplement','src-direct','CPM\'s supplemental MN correlation document lists this lesson.'],
+  ccss_lesson_guide:['CPM CCSS Lesson Guide','src-direct','CPM\'s lesson guide explicitly lists this CCSS code for this lesson.'],
+  ccss_pdf_correlation:['CPM CCSS PDF','src-direct','CPM\'s CCSS alignment PDF maps this standard to this lesson.'],
+  bridged_via_ccss:['Bridged via CCSS','src-bridge','Inferred: this lesson has a CCSS code that the cross-reference map groups with this standard.'],
+  bridged_via_mn2022:['Bridged via MN-2022','src-bridge','Inferred: this lesson has an MN-2022 code in the same concept area as this standard.'],
+  bridged_via_mn2022_hs:['Bridged via MN-2022 (HS)','src-bridge','Inferred: the HS correlation sheet maps this MN-2022 code to this MN-2007 standard.'],
+  bridged_via_content:['Content Match','src-content','Inferred: lesson title/concepts match this standard\'s topic area by keyword analysis.'],
+};
+
+function showCellDetail(stdId, courseId, chapter){
+  const std=stdI[stdId];
+  if(!std) return;
+  const fw=std.framework;
+
+  // Find lessons in this course+chapter aligned to this standard
+  const allMods=L(s2m, stdId).filter(m=>m.course_id===courseId);
+  const chMods=chapter==='*' ? allMods : allMods.filter(m=>{
+    const mod=modI[m.module_id];
+    return mod && String(mod.chapter)===String(chapter);
+  });
+
+  let body='';
+  body+=`<div class="std-desc"><b>${std.code}</b>: ${std.description||std.topic||'(no description)'}</div>`;
+
+  if(chMods.length===0){
+    if(chapter==='*'){
+      body+=`<div class="gap-msg">No CPM ${courseId} lessons align to this standard.</div>`;
+    } else {
+      body+=`<div class="gap-msg">No lessons in Chapter ${chapter} align to this standard.</div>`;
+      if(allMods.length>0){
+        body+=`<p style="font-size:12px;color:#6b7280;margin-bottom:8px">But ${allMods.length} lesson(s) in other chapters do:</p>`;
+        allMods.forEach(m=>{
+          const mod=modI[m.module_id];
+          if(!mod) return;
+          const sl=SOURCE_LABELS[m.source]||['Unknown','src-bridge',''];
+          body+=`<div class="lesson-row">
+            <span class="lesson-id">Ch${mod.chapter} ${mod.lesson||mod.section||''}</span>
+            <span class="lesson-concepts">${mod.core_concepts||''}</span>
+            <span class="src-tag ${sl[1]}">${sl[0]}</span>
+          </div>`;
+        });
+      }
+    }
+  } else {
+    body+=`<p style="font-size:12px;color:#6b7280;margin-bottom:8px">${chMods.length} lesson(s) ${chapter==='*'?'in '+courseId:'in Chapter '+chapter}:</p>`;
+    chMods.forEach(m=>{
+      const mod=modI[m.module_id];
+      if(!mod) return;
+      const sl=SOURCE_LABELS[m.source]||['Unknown','src-bridge',''];
+      body+=`<div class="lesson-row">
+        <span class="lesson-id">${mod.lesson||mod.section||'Ch'+mod.chapter}</span>
+        <span class="lesson-concepts">${mod.core_concepts||''}</span>
+        <span class="src-tag ${sl[1]}" title="${sl[2]}">${sl[0]}</span>
+      </div>`;
+    });
+  }
+
+  // Source legend
+  body+=`<div style="margin-top:14px;padding-top:10px;border-top:1px solid #e5e7eb;font-size:11px;color:#6b7280">
+    <b>Source key:</b>
+    <span class="src-tag src-direct">Direct</span> CPM's own documents
+    <span class="src-tag src-bridge">Bridged</span> Inferred via cross-reference
+    <span class="src-tag src-content">Content</span> Matched by lesson topic
+  </div>`;
+
+  const chLabel=chapter==='*'?courseId+' Total':`${courseId} Ch${chapter}`;
+  const overlay=document.createElement('div');
+  overlay.className='hm-detail-overlay';
+  overlay.onclick=e=>{if(e.target===overlay) overlay.remove();};
+  overlay.innerHTML=`<div class="hm-detail">
+    <div class="hm-detail-hdr">
+      <h3>${std.code} × ${chLabel}</h3>
+      <button class="hm-detail-close" onclick="this.closest('.hm-detail-overlay').remove()">&times;</button>
+    </div>
+    <div class="hm-detail-body">${body}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const esc=e=>{if(e.key==='Escape'){overlay.remove();document.removeEventListener('keydown',esc);}};
+  document.addEventListener('keydown',esc);
+}
 
 /* Red→Yellow→Green gradient based on count / max */
 function hmColor(count, max){
@@ -272,7 +374,7 @@ function buildHeatmap(stds, courseId, title){
 
   let h=`<div class="card">
     <h2>${title}</h2>
-    <p style="color:#6b7280;font-size:12px;margin-bottom:6px">Rows = standards, columns = chapters. Cell color: <b style="color:#ef4444">red</b> = gap, <b style="color:#eab308">yellow</b> = few, <b style="color:#22c55e">green</b> = many alignments.</p>
+    <p style="color:#6b7280;font-size:12px;margin-bottom:6px">Rows = standards, columns = chapters. Click any cell to see the reasoning. Color: <b style="color:#ef4444">red</b> = gap, <b style="color:#eab308">yellow</b> = few, <b style="color:#22c55e">green</b> = many alignments.</p>
     ${hmLegendHTML(globalMax)}
     <div class="heatmap-wrap"><table class="heatmap">
     <thead><tr><th class="corner">Standard</th>`;
@@ -289,10 +391,10 @@ function buildHeatmap(stds, courseId, title){
         rowTotal+=n;
         const bg=hmColor(n, globalMax);
         const fg=n===0?'#991b1b':(n>=globalMax*0.5?'#fff':'#1a1a2e');
-        h+=`<td class="hm-cell" style="background:${bg};color:${fg}" title="${s.code} × Ch${ch}: ${n} lesson${n!==1?'s':''}">${n||''}</td>`;
+        h+=`<td class="hm-cell" style="background:${bg};color:${fg}" title="${s.code} × Ch${ch}: ${n} lesson${n!==1?'s':''}" onclick="showCellDetail(${s.id},'${courseId}','${ch}')">${n||''}</td>`;
       });
       const totBg=hmColor(rowTotal, globalMax*chNums.length*0.15);
-      h+=`<td class="hm-cell" style="background:${totBg};font-weight:700" title="Total: ${rowTotal}">${rowTotal}</td></tr>`;
+      h+=`<td class="hm-cell" style="background:${totBg};font-weight:700" title="Total: ${rowTotal}" onclick="showCellDetail(${s.id},'${courseId}','*')">${rowTotal}</td></tr>`;
     });
   });
 
