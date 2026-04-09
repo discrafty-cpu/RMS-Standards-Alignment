@@ -1323,6 +1323,8 @@ def bridge_mn2007(conn, standards_map):
                 new_count += 1
 
     # HS correlations direct MN-2022 → MN-2007 column (supports multi-code values)
+    # Also populates MN-2007 domain + description from MN-2022 benchmark text
+    mn07_domain_map = {'2': 'Algebra', '3': 'Geometry & Measurement', '4': 'Data Analysis & Probability'}
     hs_f = get_data_file_by_keywords("Correlations", "MN")
     if hs_f:
         try:
@@ -1330,14 +1332,18 @@ def bridge_mn2007(conn, standards_map):
                 if 'grade 9' not in sheet.lower() and 'cca' not in sheet.lower():
                     continue
                 df = pd.read_excel(hs_f, sheet_name=sheet, header=None)
+                cur_strand = ''
                 for i in range(5, len(df)):
+                    strand_val = str(df.iloc[i, 1]).strip()
+                    if strand_val != 'nan':
+                        cur_strand = strand_val
                     mn22_code = clean_text(df.iloc[i, 3])
+                    mn22_bench = str(df.iloc[i, 4]).strip()
                     mn07_raw = str(df.iloc[i, 8]).strip()
                     if not mn22_code or mn07_raw == 'nan':
                         continue
                     if not re.match(r'^\d+\.\d+', mn22_code):
                         continue
-                    # Extract ALL MN-2007 codes from the cell (may have multiple, newline-separated)
                     mn07_codes_found = re.findall(r'(\d+\.\d+\.\d+\.\d+)', mn07_raw)
                     if not mn07_codes_found:
                         continue
@@ -1345,16 +1351,23 @@ def bridge_mn2007(conn, standards_map):
                     if not mn22_std:
                         continue
                     mods = conn.execute("SELECT module_id FROM cpm_standard_alignments WHERE standard_id=?", (mn22_std[0],)).fetchall()
+                    bench_desc = mn22_bench if mn22_bench != 'nan' else ''
                     for mn07_code in mn07_codes_found:
+                        parts = mn07_code.split('.')
+                        domain = mn07_domain_map.get(parts[1], '') if len(parts) >= 2 else ''
                         mn07_std = conn.execute("SELECT id FROM standards WHERE framework='MN-2007' AND code=?", (mn07_code,)).fetchone()
                         if not mn07_std:
                             new_id = conn.execute("SELECT COALESCE(MAX(id),0)+1 FROM standards").fetchone()[0]
                             standards_map[('MN-2007', mn07_code)] = new_id
-                            conn.execute("INSERT INTO standards (id, framework, code, grade) VALUES (?,?,?,?)",
-                                         (new_id, 'MN-2007', mn07_code, mn07_code.split('.')[0]))
+                            conn.execute("INSERT INTO standards (id, framework, code, grade, domain, description) VALUES (?,?,?,?,?,?)",
+                                         (new_id, 'MN-2007', mn07_code, mn07_code.split('.')[0], domain, bench_desc))
                             mn07_std_id = new_id
                         else:
                             mn07_std_id = mn07_std[0]
+                            # Update if domain/description missing
+                            conn.execute("""UPDATE standards SET domain=COALESCE(NULLIF(domain,''),?),
+                                description=COALESCE(NULLIF(description,''),?) WHERE id=?""",
+                                (domain, bench_desc, mn07_std_id))
                         for (mid,) in mods:
                             conn.execute("INSERT OR IGNORE INTO cpm_standard_alignments VALUES (?,?,?)",
                                          (mid, mn07_std_id, 'bridged_via_mn2022_hs'))
