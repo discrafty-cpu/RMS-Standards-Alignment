@@ -549,7 +549,8 @@ function renderByBook(){
     h+=`<table><thead><tr>
       <th style="width:50px">Ch</th>
       <th style="width:80px">Lesson</th>
-      <th>${fw} Standards Aligned</th>
+      <th style="width:45%">Success Criteria</th>
+      <th>${fw} Standards</th>
     </tr></thead><tbody>`;
 
     let curCh=null;
@@ -557,16 +558,34 @@ function renderByBook(){
       if(show==='covered'&&(modStdMap[m.id]||[]).length===0) return;
       if(m.chapter!==curCh){
         curCh=m.chapter;
-        h+=`<tr><td colspan="3" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 12px">Chapter ${curCh}</td></tr>`;
+        h+=`<tr><td colspan="4" style="background:#1e3a8a;color:#fff;font-weight:700;padding:6px 12px">Chapter ${curCh}</td></tr>`;
       }
       const stds=modStdMap[m.id]||[];
       const stdTags=stds.length>0
         ? [...new Set(stds.map(s=>s.code))].map(c=>`<span class="tag tag-lesson">${c}</span>`).join(' ')
         : '<span style="color:#6b7280;font-size:11px">no '+fw+' alignment</span>';
 
+      // Success criteria: unique benchmark descriptions from aligned standards
+      let criteria='';
+      if(stds.length>0){
+        const seen=new Set();
+        const descs=[];
+        stds.forEach(s=>{
+          const std=stdI[s.standard_id];
+          if(!std||!std.description) return;
+          const short=std.description.slice(0,120);
+          if(seen.has(std.code)) return;
+          seen.add(std.code);
+          descs.push(short+(std.description.length>120?'...':''));
+        });
+        criteria=descs.slice(0,3).map(d=>`<div style="margin-bottom:3px">&bull; ${d}</div>`).join('');
+        if(descs.length>3) criteria+=`<div style="color:#6b7280;font-size:11px">+${descs.length-3} more</div>`;
+      }
+
       h+=`<tr>
         <td>${m.chapter||''}</td>
         <td><code>${m.lesson||m.section||''}</code></td>
+        <td style="font-size:12px;color:#374151">${criteria}</td>
         <td>${stdTags}</td>
       </tr>`;
     });
